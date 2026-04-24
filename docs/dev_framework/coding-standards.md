@@ -1,6 +1,8 @@
 # Coding standards
 
-> **Who loads this doc:** the Executor subagent at spawn (authoring) and the Reviewer subagent at spawn (enforcing). The Orchestrator and Strategist do NOT carry this file in session-start context — code-level enforcement is delegated to the subagent layer. See [`context-management.md`](context-management.md) for the layering rules.
+> **Who loads this doc:** the Executor subagent at spawn (authoring), the Reviewer subagent at spawn (enforcing — sequential mode), and the Integrator-QA subagent at spawn (enforcing — batch mode, and authoring its own fix commits). The Orchestrator and Strategist do NOT carry this file in session-start context — code-level enforcement is delegated to the subagent layer. See [`context-management.md`](context-management.md) for the layering rules.
+>
+> **Fix commits follow the same rules as Executor commits, regardless of who writes them.** In batch mode ([ADR-016](../architecture/adr-016-batch-mode-integrator-qa.md)) the Integrator-QA may write fix commits within a W-item's existing acceptance. Those commits are subject to the full discipline below — TDD, no hardcoded lifecycle values, no silent fallbacks, canonical-value grep. Batch mode is NOT a quiet bypass of the standards; a clean Integrator-QA verdict on code that violates a rule here is an Integrator bug.
 
 Enforced practices for all agents writing code in this repo. These aren't aspirational — they're the result of real incidents where shortcuts caused silent regressions, lost work, or wasted sessions.
 

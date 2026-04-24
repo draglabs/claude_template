@@ -12,8 +12,9 @@ Applies to any session (Opus or Sonnet) driving work items from [execution-plans
 |---|---|---|
 | **Orchestrator** | The active Claude Code session. | **Dispatcher + merger + review coordinator.** Picks the next W-item, pre-creates the worktree off `origin/dev`, dispatches Executor, then spawns Reviewer and (when required) QA as peer subagents, owns the retry loop, merges, pushes. Does NOT write code. Does NOT open diffs or `src/` directly — reads Reviewer/QA verdicts instead (which may cite `file:line`). |
 | **Executor** | Sonnet subagent spawned via Agent tool by the Orchestrator. | **Writer.** Writes code + tests in a pre-created worktree, commits to the feature branch, returns a code-only package to the Orchestrator. Does NOT spawn Reviewer or QA. Does NOT merge or push. |
-| **Reviewer** | Opus subagent spawned via Agent tool **by the Orchestrator**. | Reviews the Executor's diff against canonical docs + coding standards. Returns verdict + concerns to the Orchestrator. Does not modify files. |
-| **QA** | Sonnet subagent spawned via Agent tool **by the Orchestrator** — per-W-item (pre-merge) or at phase exit. | Runs end-to-end tests against a pre-merge worktree build or the live dev environment. Returns structured pass/fail to the Orchestrator. Cleans up test artifacts on success. |
+| **Reviewer** | Opus subagent spawned via Agent tool **by the Orchestrator**. Sequential-mode (per-task) only. | Reviews the Executor's diff against canonical docs + coding standards. Returns verdict + concerns to the Orchestrator. Does not modify files. |
+| **QA** | Sonnet subagent spawned via Agent tool **by the Orchestrator** — per-W-item (pre-merge, sequential mode only), at phase exit, or post-promotion. | Runs end-to-end tests against a pre-merge worktree build or the live dev environment. Returns structured pass/fail to the Orchestrator. Cleans up test artifacts on success. |
+| **Integrator-QA** | Opus 1M subagent spawned via Agent tool **by the Orchestrator** — batch mode (ADR-016) only, end of parallel batch. | Integrates N parallel-safe W-item branches, resolves merges, reviews against coding standards, runs full test suite (including live/Playwright), fixes within acceptance, files claims for scope changes. Absorbs per-task Reviewer and pre-merge QA for items in the batch. |
 | **Doc Consultant** | Sonnet subagent spawned by any role. | Reads the doc corpus and answers a targeted question. Returns a short citation-backed answer. Does not modify files. |
 | **Code Consultant** | Sonnet subagent spawned primarily by the Strategist. | Reads code and answers a targeted question. Returns a short citation-backed answer. Does not modify files. |
 
@@ -51,7 +52,9 @@ User ↔ Orchestrator
 
 Sequential by design: Reviewer first, QA only after `ship`. Parallel execution would waste QA cycles on code that's about to change.
 
-## Tiered execution pattern
+## Tiered execution pattern (sequential mode)
+
+Applies to sequential-mode (per-task) dispatch — W-items with `Parallel-safe: false` or unset. For batch-mode dispatch (`Parallel-safe: true`), see §"Batch mode" below; batch mode does NOT use tier-based retry caps, it uses verdict-driven outcomes from the Integrator-QA.
 
 All tiers use the same peer-dispatch flow. Tiers differ only in **which gates are mandatory** and **how many retries the Orchestrator gets before escalating**.
 
@@ -102,6 +105,75 @@ The Orchestrator does NOT escalate when:
 - All gates passed within the retry cap (user doesn't need to see the intermediate blocks).
 - One retry fixed the concern cleanly.
 
+## Batch mode
+
+An alternative dispatch path for W-items marked `Parallel-safe: true` on the plan. Introduced in [ADR-016](../architecture/adr-016-batch-mode-integrator-qa.md) to amortize Opus review cost across independent work. When multiple parallel-safe W-items are ready to dispatch, the Orchestrator runs them as a batch instead of serially.
+
+### Batch dispatch flow
+
+```
+Orchestrator
+  ├─▶ Executor (worktree, Sonnet) — W-X1      ─┐
+  ├─▶ Executor (worktree, Sonnet) — W-X2      ─┤  concurrent,
+  ├─▶ Executor (worktree, Sonnet) — W-X3      ─┘  ~3 cap
+              │
+              ▼ all return with PASS shapes (Tests + Self-check included)
+         Orchestrator
+              │
+              ▼
+  ─▶ Integrator-QA (Opus 1M, sees all N worktrees)
+              │
+              ├─ First pass: high-profile scan
+              │     └─ red flag + <80% confidence → integration-failure
+              │                                    (surface to user; no merge)
+              │
+              ├─ Deep pass: pull → merge → review → test (incl. Playwright)
+              │     └─ fix within acceptance (TDD, coding-standards)
+              │
+              ├─ Scope-change path (outside acceptance)
+              │     ├─ ≥80% confident → file IC-NNN claim on plan; named
+              │     │                    W-items held, unnamed proceed
+              │     └─ <80% confident → integration-failure (surface)
+              │
+              ▼
+         Orchestrator merges clean items to dev → push → auto-advance
+```
+
+### How batch mode differs from sequential mode
+
+| Concern | Sequential (ADR-013) | Batch (ADR-016) |
+|---|---|---|
+| Reviewer stage | Per-task Opus call | Absorbed into Integrator-QA (one Opus 1M call per batch) |
+| Pre-merge QA | Per-task Sonnet call (L/XL/🧪/⚠️) | Absorbed into Integrator-QA |
+| Phase-exit QA | Unchanged (live dev env) | Unchanged |
+| Retries on `block` | Fresh Executor + fresh Reviewer, counted against cap | Integrator-QA fixes inline within acceptance — no Executor bounce. Claim path handles scope issues. |
+| Merge authority | Orchestrator, after Reviewer ships | Orchestrator, after Integrator-QA returns `clean` or `partial` (only clean items merge on partial) |
+| Conflict resolution | Orchestrator (conflicts rare — one branch merges at a time) | Integrator-QA (single Opus 1M context sees all diffs; conflicts more likely given concurrent work) |
+
+### Eligibility
+
+A W-item is batch-eligible iff:
+1. The plan has `Parallel-safe: true` on the item.
+2. All its `Depends on` items are `done` or `shipped`.
+3. No open Integration claim (IC-NNN) on the plan names it as a Blocked item.
+
+The Orchestrator groups up to ~3 eligible items into a batch and dispatches them concurrently. Items that fail eligibility at the moment of dispatch (e.g., a Depends-on just flipped to blocked) sit out the current batch and are reconsidered for the next one.
+
+### Integrator-QA retry model
+
+Unlike per-task retries, batch-mode does not have a fixed "retry cap." The Integrator-QA either:
+
+- **Returns `clean`** — all items in the batch merged. Auto-advance.
+- **Returns `partial`** — some items merged, others held by open claims. Auto-advance on the clean items; named-blocked items wait for Strategist+user claim resolution.
+- **Returns `integration-failure`** — first-pass red flag or low-confidence scope issue. Nothing merged. Surface to user immediately.
+- **Returns `stumped`** — deep pass revealed something the Integrator can't resolve, including within-acceptance. Nothing merged. Surface to user.
+
+There is no "re-run the Integrator-QA" loop the way sequential mode runs Reviewer loops. If the Integrator can't close a batch, the user decides next steps. Re-dispatching Executors to the same items with sharpened briefs is one option the user may choose, but it's a user decision, not an automatic retry.
+
+### Claim resolution
+
+Integration claims (IC-NNN) live inline on the active execution plan — see `execution-plans/README.md §"Integration claims"`. The Strategist triages alongside `process-exceptions.md` at phase boundaries and on demand. Dispositions (`approve` / `reject` / `modify`) are recorded with the claim; on `approve` or `modify`, the Orchestrator re-dispatches the affected items (either as a small batch or sequentially, depending on updated `Parallel-safe` status). The Orchestrator's cadence is "continue forward progress on unblocked items; revisit claim-blocked items after Strategist disposition."
+
 ## Status ledger (non-negotiable)
 
 The Orchestrator owns the status of every W-item on the active execution plan. Status updates are **atomic with the git events that trigger them**:
@@ -150,7 +222,10 @@ After merging to **`dev`** and pushing (and after flipping the W-item Status to 
 - **⚠️ items** — Opus review is already the default. ⚠️ additionally forces QA regardless of tier and bumps the retry cap to 3.
 - **🔍 items** — The Orchestrator runs the spike directly (research, not code). 2h max. No Executor dispatch. Validate conclusions in the real runtime environment, not simplified tests. This is the ONE case where the Orchestrator touches content, because there's no diff to produce.
 - **🧪 items** — QA required regardless of tier. Orchestrator dispatches QA after Reviewer ships.
-- **Parallel execution** — only for dependency-graph-independent W-items. Orchestrator can run multiple concurrent W-items, each with its own worktree + its own peer chain (Executor, Reviewer, optional QA). Practical cap ~3 concurrent W-items: with per-item peer dispatch, 3-wide parallelism is already 6–9 concurrent subagents. More risks confused diagnosis when something fails.
+- **Parallel execution** — only for dependency-graph-independent W-items marked `Parallel-safe: true` on the plan (see [ADR-016](../architecture/adr-016-batch-mode-integrator-qa.md) and `execution-plans/README.md §"Parallel-safe field"`). Two dispatch paths:
+  - **Batch mode (Parallel-safe: true):** Orchestrator dispatches up to ~3 concurrent Executors, one worktree each. When all return, a single Integrator-QA (Opus 1M) call absorbs per-task Reviewer + pre-merge QA — one Opus call amortized across the batch instead of N. See §"Batch mode" below.
+  - **Sequential mode (Parallel-safe: false or unset):** Orchestrator runs each W-item through its own per-task peer chain (Executor, Reviewer, optional QA) serially. This is the ADR-013 default.
+  Practical cap on batch size is ~3 W-items — wider batches increase Integrator-QA blast radius on failure.
 - **Doc questions → Doc Consultant, not inline reads.** When the Orchestrator needs to check a locked decision, cross-reference acceptance criteria, or verify a constraint, spawn a Doc Consultant subagent instead of reading the docs inline. The Consultant's 10-line answer costs far less context than loading 3 full docs. Exception: docs already loaded at session start (Layer 1).
 - **Strategist code questions → Code Consultant.** The Strategist does not load project `src/`. When it needs a code-level fact to approve a plan or verify a claim, it spawns a Code Consultant subagent.
 - **Code-quality rules live in the subagent layer.** The Orchestrator does not carry `docs/dev_framework/coding-standards.md`. TDD, no-hardcoded-values, and fail-loudly enforcement happens in the Executor brief (authoring) and Reviewer brief (blocking merge). If a Reviewer returns `ship` on code that violates the standards, that's a Reviewer bug — file an execution incident.
@@ -185,19 +260,30 @@ feature (w-<id>/<slug>)  ──Orchestrator merge──▶  dev  ──phase-exi
 
 See [`dev-environment.md`](dev-environment.md) for local vs remote dev mode.
 
-Every W-item follows one flow:
+Every W-item follows one of two flows depending on its `Parallel-safe` field (see §"Batch mode" above and [ADR-016](../architecture/adr-016-batch-mode-integrator-qa.md)). The sequential flow described below is per-task mode (ADR-013); batch-mode items follow the batch flow in §"Batch mode" §"Batch dispatch flow" instead of steps 3–4 below.
+
+### Sequential mode (Parallel-safe: false or unset)
 
 1. **Orchestrator** pre-creates the worktree explicitly off `origin/dev` with `git worktree add -b w-<id>/<slug> <path> origin/dev`, then dispatches the Executor via the Agent tool (WITHOUT the `isolation: "worktree"` flag — the Orchestrator owns worktree creation under this model). The Executor works inside the pre-created worktree.
 
    **Mechanism, not intention.** The Agent tool's `isolation: "worktree"` flag creates a worktree from the parent session's current HEAD. If the Orchestrator happens to be sitting on `main` (or any other branch) when it dispatches, the worktree — and therefore the feature branch — inherits THAT base. Rule compliance here requires the Orchestrator to pre-create the worktree off `origin/dev` explicitly so the base becomes a literal command-line argument. "I read the rule" is not enforcement. The command is.
 
-2. **Executor** writes code + tests inside the worktree, commits to the feature branch, returns a code-only package to the Orchestrator.
+2. **Executor** writes code + tests inside the worktree, commits to the feature branch, runs its own unit/integration tests + coding-standards self-check, returns a code-only package to the Orchestrator.
 
 3. **Orchestrator** spawns the Reviewer (Opus) as a peer Agent-tool call, passing the worktree path and the latest commit SHA. On `block`, Orchestrator dispatches a fresh Executor with the concerns and re-spawns the Reviewer. Retry cap per tier.
 
 4. **Orchestrator** (if tier L/XL or marker 🧪 or ⚠️) spawns the QA as a peer Agent-tool call after Reviewer ships. Same retry pattern on `fail`.
 
 5. **Orchestrator** verifies the return per §"Trust but verify", merges the feature branch to **`dev`**, pushes `dev`. If remote-hosted dev, CI now deploys to `{{sub}}.dev.{{website}}.com`. Auto-advance to next W-item.
+
+### Batch mode (Parallel-safe: true)
+
+Same worktree pre-creation discipline per item (step 1), same Executor self-test discipline (step 2). Differences:
+
+- Orchestrator dispatches up to ~3 Executors concurrently.
+- When all N Executors return, Orchestrator spawns a single Integrator-QA (Opus 1M) that absorbs per-task Reviewer + pre-merge QA for every item in the batch (replaces steps 3–4).
+- Integrator-QA returns `clean` / `partial` / `integration-failure` / `stumped`. On `clean`, Orchestrator merges every item. On `partial`, Orchestrator merges the non-blocked items and leaves the claim-blocked items for Strategist disposition. On `integration-failure` or `stumped`, Orchestrator surfaces to the user (no merge).
+- Fix commits authored by the Integrator-QA are already in dev (or an integration branch the Integrator is using) when its return lands; Orchestrator does not re-merge those.
 
 Main is NOT touched per W-item. Main only moves at phase-boundary promotion (see §"Phase exit gate" below).
 

@@ -41,8 +41,8 @@ Each persistent instance reads its role doc at session start. No instance reads 
 
 Reference material pulled only when actively needed for a specific task.
 
-- `docs/dev_framework/coding-standards.md` — loaded by Executor and Reviewer subagents at spawn (Step 1 of their briefs)
-- `docs/dev_framework/templates/*` — briefing templates, loaded when spawning a subagent
+- `docs/dev_framework/coding-standards.md` — loaded by Executor, Reviewer, and Integrator-QA subagents at spawn (Step 1 / Step 0 of their briefs)
+- `docs/dev_framework/templates/*` — briefing templates, loaded when spawning a subagent. In particular: `reviewer-brief.md` for sequential-mode per-task review, `integrator-qa-brief.md` for batch-mode end-of-batch integration + review + test + fix (ADR-016), `qa-brief.md` for phase-exit and post-promotion live-environment passes.
 - `docs/framework_exceptions/execution-incidents.md` — loaded when a process violation occurs
 - `docs/archive/*` — closed phases, loaded only for historical reference
 - `references/` — external repos, loaded when cross-referencing

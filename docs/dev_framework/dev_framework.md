@@ -47,7 +47,9 @@ User ↔ Orchestrator        (dispatcher + review coordinator + merger)
                      production CI deploy
 ```
 
-Every subagent is a peer under the Orchestrator — no subagent spawns another subagent (hard constraint of the Claude Agent SDK; see [ADR-013](../architecture/adr-013-peer-dispatch.md)). The Orchestrator never opens diffs or source files; it reads Reviewer and QA verdicts (which cite `file:line`). Main only moves at phase-exit promotion.
+Every subagent is a peer under the Orchestrator — no subagent spawns another subagent (hard constraint of the Claude Agent SDK; see [ADR-013](../architecture/adr-013-peer-dispatch.md)). The Orchestrator never opens diffs or source files; it reads Reviewer, QA, and Integrator-QA verdicts (which cite `file:line`). Main only moves at phase-exit promotion.
+
+The stack above shows sequential (per-task) dispatch. For W-items marked `Parallel-safe: true` on the plan, the Orchestrator uses **batch mode** ([ADR-016](../architecture/adr-016-batch-mode-integrator-qa.md)): up to ~3 Executors dispatched concurrently, followed by a single **Integrator-QA** (Opus 1M) call that absorbs per-task Reviewer + pre-merge QA for the batch, writes fix commits within acceptance, files integration claims for scope changes (routed through Strategist + user), and merges the clean items to dev. Sequential mode and batch mode coexist — the choice is per-item at dispatch time, based on the `Parallel-safe` field.
 
 ## Role docs
 
@@ -62,9 +64,10 @@ Subagent briefs (load on spawn, not at session start):
 
 | Role | Brief | Spawned by |
 |---|---|---|
-| Executor | [`templates/executor-brief.md`](templates/executor-brief.md) | Orchestrator |
-| Reviewer | [`templates/reviewer-brief.md`](templates/reviewer-brief.md) | Orchestrator (peer of Executor) |
-| QA | [`templates/qa-brief.md`](templates/qa-brief.md) | Orchestrator (per-W-item pre-merge, phase exit, and post-promotion smoke) |
+| Executor | [`templates/executor-brief.md`](templates/executor-brief.md) | Orchestrator (both modes) |
+| Reviewer | [`templates/reviewer-brief.md`](templates/reviewer-brief.md) | Orchestrator — **sequential mode only**, peer of Executor |
+| QA | [`templates/qa-brief.md`](templates/qa-brief.md) | Orchestrator — per-W-item pre-merge (**sequential mode only**), phase exit (both modes), post-promotion smoke (both modes) |
+| Integrator-QA | [`templates/integrator-qa-brief.md`](templates/integrator-qa-brief.md) | Orchestrator — **batch mode only**, end of parallel batch; absorbs per-task Reviewer + pre-merge QA |
 | Doc Consultant | [`templates/doc-consultant-brief.md`](templates/doc-consultant-brief.md) | Any role |
 | Code Consultant | [`templates/code-consultant-brief.md`](templates/code-consultant-brief.md) | Primarily Strategist |
 | Orchestrator bootstrap | [`templates/orchestrator-bootstrap.md`](templates/orchestrator-bootstrap.md) | User, in a fresh session |

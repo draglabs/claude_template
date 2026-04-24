@@ -147,21 +147,34 @@ Executor and Reviewer, not you.
 
 STEP 2 — Report back with:
   a. The next W-item (W-id + title + effort tier + markers).
-  b. Your understanding of the acceptance criteria, in your own words —
-     not a quote.
-  c. Confidence: high / medium / low.
+     If multiple W-items are eligible and carry `Parallel-safe: true` on
+     the plan (and their Depends-on items are all `done`/`shipped`, and
+     none are blocked by an open Integration claim), report the full
+     eligible batch — up to ~3 items — as a single dispatch unit.
+  b. Dispatch mode: sequential (per-task, ADR-013) or batch (ADR-016).
+     Batch mode applies when the reported unit has ≥2 parallel-safe
+     items; otherwise sequential.
+  c. Your understanding of the acceptance criteria for each item, in your
+     own words — not a quote.
+  d. Confidence: high / medium / low.
        - medium → name what's unclear.
        - low → name what's blocking confidence.
-  d. The gate parameters you'll run:
-       - Reviewer: Opus (always required).
-       - QA required: yes/no (yes for L/XL or markers 🧪 / ⚠️).
-       - Retry cap: 2 (XS/S/M) / 3 (L/XL/⚠️).
-  e. Locked decisions from CLAUDE.md that constrain the work (to include
-     in the Executor brief and any relevant Reviewer/QA brief).
+  e. The gate parameters you'll run:
+       - Sequential mode: Reviewer: Opus (always required). QA required:
+         yes/no (yes for L/XL or markers 🧪 / ⚠️). Retry cap: 2 (XS/S/M)
+         / 3 (L/XL/⚠️).
+       - Batch mode: single Integrator-QA (Opus 1M) call at end of
+         batch, no per-task Reviewer/QA retry loop. See STEP 3B.
+  f. Locked decisions from CLAUDE.md that constrain the work (to include
+     in the Executor brief and any relevant Reviewer / QA / Integrator-QA
+     brief).
 
 DO NOT dispatch until I review and approve your summary.
 
 STEP 3 — Dispatch the Executor.
+
+  (Sequential mode — for a single W-item, or Parallel-safe: false / unset.
+   For batch mode, see STEP 3B after STEP 5.)
 
   BRANCHING: You pre-create the worktree explicitly off origin/dev, then
   pass the path to the Executor. Do NOT use the Agent tool's
@@ -419,6 +432,150 @@ STEP 5 — Merge + push + ledger update + auto-advance.
 
     8. Auto-advance: back to STEP 2 for the next W-item (subject to
        dev-CI green if remote-hosted).
+
+STEP 3B — Batch-mode dispatch (replaces STEPs 3–5 for parallel-safe batches).
+
+  Applies when STEP 2 reported a batch of ≥2 Parallel-safe: true W-items
+  whose Depends-on items are all done/shipped and none are blocked by an
+  open Integration claim. See session-policy.md §"Batch mode" and
+  ADR-016.
+
+  STEP 3B.1 — Pre-create one worktree per item.
+
+    For each W-id in the batch:
+      git fetch origin dev
+      git worktree add -b w-<id>/<slug> <worktree-path> origin/dev
+
+    Paths must be distinct — typically /tmp/worktrees/<project>/w-<id>-<slug>.
+    Do NOT use the Agent tool's isolation flag (same reason as STEP 3).
+
+  STEP 3B.2 — Plan-ledger update for every item in the batch.
+
+    Follow PLAN-WRITE DISCIPLINE for each update.
+
+    - Read the plan file fresh.
+    - Edit: for every item in the batch, flip Status from `pending` (or
+      `blocked` if re-dispatching after user-resolved blocker) to
+      `in_progress`. Populate Branch. Add a Notes line linking to the
+      batch ID (e.g., "Batch B3; dispatched concurrently with W-X2, W-X3").
+    - Update the summary table to match.
+    - Commit:
+        git add docs/execution-plans/<active-plan>.md
+        git commit -m "Batch <batch-id>: dispatch N items (pending → in_progress)"
+        git push origin dev
+    - Verify per PLAN-WRITE DISCIPLINE. If any check fails, DO NOT
+      dispatch any Executor in this batch. Re-apply or surface.
+
+  STEP 3B.3 — Dispatch all N Executors concurrently.
+
+    Make N Agent-tool calls in a single message (independent calls,
+    parallel execution). For each:
+      - subagent_type: "general-purpose"
+      - model: "sonnet"
+      - prompt: <filled-in executor-brief.md for this W-id — tier,
+                branch, worktree path, What/Acceptance/Touches/References/
+                Locked decisions, Retry cycle: no, empty Prior concerns>
+      - DO NOT set isolation — worktrees are pre-created.
+
+    Wait for all N Executors to return. Do NOT inspect partial results or
+    spawn the Integrator-QA until all return. A PASS shape from each
+    includes Tests run, Test results, Self-check, and (if any) Scope
+    creep — preserve these verbatim for the Integrator brief.
+
+    If any Executor returned STUMPED (brief ambiguity):
+      → flip THAT item's Status to `blocked` per PLAN-WRITE DISCIPLINE,
+        append a Notes line with the unresolved concern, commit, push.
+      → Continue with the Integrator-QA dispatch using only the remaining
+        (non-stumped) items. If ALL items stumped, skip Integrator-QA and
+        surface the batch to the user.
+
+  STEP 3B.4 — Spawn the Integrator-QA (single call).
+
+    Spawn via Agent tool with:
+      - subagent_type: "general-purpose"
+      - model: "opus"
+      - isolation: omit (Integrator reads the pre-created worktrees)
+      - prompt: <filled-in integrator-qa-brief.md with:
+                  * Batch ID,
+                  * For each item: W-id, branch, worktree path, latest
+                    commit SHA, full verbatim Executor PASS shape,
+                    References list if populated,
+                  * Locked decisions that constrain the batch,
+                  * Active plan path (the Integrator needs it to file
+                    claims inline if needed)>
+
+    Wait for the Integrator-QA verdict.
+
+  STEP 3B.5 — Handle the Integrator-QA return.
+
+    Verdict: `clean`
+      → Integrator-QA already merged every item in the batch to dev and
+        pushed. Your job is ledger update + cleanup.
+      → Plan-ledger update per PLAN-WRITE DISCIPLINE:
+          Read plan fresh. For every merged W-id, flip Status from
+          `in_progress` to `done`. Update summary table. Copy the
+          Integrator's Lessons learned into the Notes field (one line
+          summary per item). Commit:
+            git commit -m "Batch <batch-id>: merged to dev (in_progress → done)"
+            git push origin dev
+          Verify.
+      → Cleanup: `git worktree remove <path>` for each.
+      → Auto-advance: back to STEP 2.
+
+    Verdict: `partial`
+      → Integrator-QA merged some items; others held by open Integration
+        claims (IC-NNN) on the plan.
+      → Plan-ledger update per PLAN-WRITE DISCIPLINE:
+          For merged items: Status `in_progress` → `done` (same as clean).
+          For held items: keep Status `in_progress`. Add a Notes line
+          "Held by IC-<NNN> — see Integration claims (open) section."
+          Update summary table. Commit + push.
+      → Do NOT cleanup worktrees for held items — the Strategist may
+        approve the claim and re-dispatch the same worktree. Cleanup the
+        merged items' worktrees.
+      → Surface to user: one-liner naming the batch, merged items, held
+        items, and the IC-NNN numbers. Note that the Strategist will
+        triage the claim; forward progress continues on unblocked items.
+      → Auto-advance: back to STEP 2 for the next eligible item/batch
+        (held items stay as they are until the claim is disposed).
+
+    Verdict: `integration-failure`
+      → Nothing merged. High-profile red flag in the first pass OR
+        low-confidence scope issue.
+      → Plan-ledger update per PLAN-WRITE DISCIPLINE:
+          For every item in the batch: flip Status `in_progress` →
+          `blocked`. Notes line: "Integration failure (batch <id>) —
+          see Integrator-QA return."
+          Commit + push.
+      → DO NOT cleanup worktrees — user may re-dispatch.
+      → Surface to user immediately: paste the Integrator-QA's return
+        verbatim. Include the red-flag citation (or the low-confidence
+        scope description). Do NOT propose a fix; the Integrator already
+        signaled this is above its confidence threshold. User decides.
+      → Pause. Do NOT auto-advance.
+
+    Verdict: `stumped`
+      → Nothing merged. Integrator hit an issue it couldn't resolve in
+        the deep pass.
+      → Same ledger update as integration-failure: `in_progress` →
+        `blocked` for every item in the batch, Notes line referencing
+        the Integrator's "what I'd need to proceed" note.
+      → Same worktree retention, same user surface.
+      → Pause. Do NOT auto-advance.
+
+  STEP 3B.6 — Relay Integrator-QA process exceptions (all verdicts).
+
+    The Integrator-QA's return may include process-exception entries —
+    SOP-level friction it observed (brief ambiguity, tool surprise, etc.,
+    distinct from the integration work itself). The Integrator returns
+    these as verdict-field entries rather than writing them directly;
+    you append each as an Open entry to
+    docs/framework_exceptions/process-exceptions.md on dev. Commit as a
+    standalone commit:
+      git add docs/framework_exceptions/process-exceptions.md
+      git commit -m "Batch <batch-id>: relay N process exceptions from Integrator-QA"
+      git push origin dev
+    Same relay pattern as STEP 5 step 5 for Reviewer/QA.
 
 STEP 6 — Phase exit + promotion to main (when all W-items complete).
 

@@ -2,7 +2,9 @@
 
 Copy, fill in brackets, paste as the Agent tool's `prompt` argument. Do NOT set `isolation: "worktree"` on the Agent tool call — the Orchestrator pre-creates the worktree explicitly off `origin/dev` and passes the path in this brief. The tool's built-in isolation machinery is bypassed on purpose so the branch base is a literal command-line argument, not a thing to remember.
 
-Under peer dispatch, the Executor is a single-cycle writer: it reads, writes, commits, and returns. It does NOT spawn Reviewer or QA — the Orchestrator owns those peer calls. Iteration happens at the Orchestrator level: if the Reviewer blocks or QA fails, the Orchestrator dispatches a fresh Executor with the concerns as sharpened context. See [`../session-policy.md`](../session-policy.md) §"Dispatch flow" for the full model.
+Under peer dispatch, the Executor is a single-cycle writer: it reads, writes, commits, and returns. It does NOT spawn Reviewer, QA, or Integrator-QA — the Orchestrator owns those peer calls. Iteration happens at the Orchestrator level: if the Reviewer blocks, QA fails, or Integrator-QA files a claim / surfaces a failure, the Orchestrator dispatches a fresh Executor with the concerns as sharpened context. See [`../session-policy.md`](../session-policy.md) §"Dispatch flow" for the full model.
+
+**Mode awareness.** This brief is used for both per-task mode (sequential W-items, Reviewer and optional QA peer gates after return — ADR-013) and batch mode (parallel-safe W-items, Integrator-QA absorbs per-W-item Reviewer and pre-merge QA — ADR-016). The writing discipline is identical across both modes; what changes is which peer gate reads your work after return. In batch mode, your self-test and self-check are higher-stakes because the Integrator-QA is the single end-of-batch quality gate — don't return on a hopeful self-assessment.
 
 ```
 ## {{W-id}} — {{title}}
@@ -113,13 +115,54 @@ STEP 3 — Write.
 
 Commit your changes to the worktree's feature branch with a descriptive
 message. On a retry cycle, write NEW commits on top of existing ones —
-do NOT amend, do NOT rebase. The Reviewer reads the chain of history.
+do NOT amend, do NOT rebase. The Reviewer (or Integrator-QA) reads the
+chain of history.
 
 Do NOT merge. Do NOT push. The Orchestrator handles those after gates pass.
 
+STEP 3a — Run your own tests before returning.
+
+  Inside the worktree, run the project's unit/integration test command
+  ({{test_command}} from CLAUDE.md). Do NOT start a live dev server — in
+  batch mode multiple Executors run concurrently, and dev-server ports
+  collide across worktrees. Live/Playwright/browser testing is the
+  Integrator-QA's job, which runs after all Executors in the batch
+  return.
+
+  If tests fail:
+    - Read the failure, fix it, commit the fix on top, re-run.
+    - Repeat until green OR you hit a failure you cannot resolve within
+      acceptance without guessing (at which point → STUMPED).
+  If tests pass: capture the command and result for the PASS shape
+  (`Tests run:` and `Test results:` fields).
+
+STEP 3b — Self-check against coding-standards.md.
+
+  Before returning, run this checklist against your diff:
+    1. TDD — did a failing test land BEFORE the implementation, for every
+       new code path? (Search the git log for the test commit preceding
+       the implementation commit.)
+    2. Hardcoded lifecycle values — any literal in your diff that
+       duplicates a canonical source (version, domain, path, container
+       name, DB URL)? If so, read from the canonical source instead.
+    3. Silent fallbacks — any `process.env.FOO || "default"` for an
+       infrastructure value? Fail loudly instead.
+    4. Canonical-value drift — if you changed any value that appears
+       elsewhere in the codebase, did you `git grep` and update every
+       site?
+
+  Record the self-check result in the PASS shape (`Self-check:` field):
+  `pass` OR `note: <what the standards flag and why you can't fix it
+  within acceptance>`. A `note` means the next gate (Reviewer in
+  per-task mode, Integrator-QA in batch mode) sees the issue named
+  upfront rather than discovering it. If the issue IS fixable within
+  acceptance, fix it and mark pass — don't push fixable work to the
+  next gate.
+
 STEP 4 — Return to Orchestrator.
 
-  IF PASS (you wrote, committed, and are ready for review):
+  IF PASS (you wrote, committed, tested, self-checked, and are ready for
+  the next gate):
     Return this exact short shape:
     ─────────────────────────────────────────────
     W-{{id}} committed.
@@ -128,6 +171,9 @@ STEP 4 — Return to Orchestrator.
     Latest commit SHA: <sha>
     Diff this dispatch: <1-line summary, e.g. "+42 / -5 across 3 files">
     Files touched: <list>
+    Tests run: <command>
+    Test results: pass | <N failing: names>
+    Self-check: pass | note: <standards issue you couldn't fix within acceptance>
     Scope creep: <none | <file>: <reason>>
     Retry cycle: <yes | no>
     Lessons learned:
@@ -194,10 +240,14 @@ Hard rules:
 - The only things you return to the Orchestrator are the two shapes above.
   The PASS/STUMPED shape is the final content of your response. No
   narration before, no content after.
-- Do NOT spawn Reviewer, QA, or any other subagent. That's not your
-  job under peer dispatch. If you find yourself trying to invoke the
-  Agent tool, stop — the Orchestrator will run the peer calls itself.
+- Do NOT spawn Reviewer, QA, Integrator-QA, or any other subagent. That's
+  not your job under peer dispatch. If you find yourself trying to invoke
+  the Agent tool, stop — the Orchestrator will run the peer calls itself.
 - Do NOT merge. Do NOT push. The Orchestrator owns `dev` and `main`.
+- Do NOT start a live dev server in the worktree. In batch mode, parallel
+  Executors would collide on dev-server ports. Live/browser/Playwright
+  testing runs in the Integrator-QA pass, not here. Your testing is
+  unit/integration only via {{test_command}}.
 - Do NOT delete files unless acceptance explicitly requires it.
 - Do NOT modify .env, .mcp.json, or CLAUDE.md unless the brief names them.
 - If you touch more than "Files you will touch", include it under
@@ -206,5 +256,5 @@ Hard rules:
   definition — References are orientation material, not write surface.
   Flag it explicitly; do not silently extend scope.
 - On retry cycles: do NOT amend or rebase prior commits. Add new commits
-  on top. The Reviewer reads history.
+  on top. The Reviewer (or Integrator-QA) reads history.
 ```

@@ -4,6 +4,8 @@ Copy, fill in brackets, paste as the Agent tool's `prompt` argument.
 
 Under peer dispatch, the Reviewer is spawned **by the Orchestrator** — a peer of the Executor, not a child of it. You return your verdict to the Orchestrator, which owns the retry loop and either re-dispatches the Executor (on `block`) or proceeds to QA / merge (on `ship`).
 
+**Scope: per-task (sequential) mode only.** This brief applies to W-items where the plan's `Parallel-safe` field is `false` or unset — i.e., dispatched under the per-task peer chain from [ADR-013](../../architecture/adr-013-peer-dispatch.md). For `Parallel-safe: true` W-items dispatched in batch mode ([ADR-016](../../architecture/adr-016-batch-mode-integrator-qa.md)), the Reviewer role is absorbed into the end-of-batch Integrator-QA — use [`integrator-qa-brief.md`](integrator-qa-brief.md) instead, not this brief.
+
 ```
 ## Review diff for {{W-id}} — {{title}}
 
