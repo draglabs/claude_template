@@ -15,10 +15,17 @@ promotion).
 
   The plan is a ledger — each Status change must be atomic with the
   git event that triggered it. Claude Code's Edit tool silently fails
-  on stale reads (file modified since the last Read in this session).
-  When that happens, `git add` stages nothing, `git commit` exits with
-  "nothing to commit", and a naive flow drops the update without
-  anyone noticing. This discipline closes that hole.
+  on stale reads (file was modified on disk since your last Read in
+  this session). The check is filesystem-level — a hash comparison
+  independent of git — so gitignoring the plan file does not prevent
+  it, and any concurrent editor in the same working tree triggers it.
+  The Orchestrator operates in the main working tree (worktrees are
+  for Executors), so plan edits by the user or Strategist land in
+  that same tree and invalidate the Orchestrator's last-Read hash
+  immediately. When the check fires, `git add` stages nothing,
+  `git commit` exits with "nothing to commit", and a naive flow
+  drops the update without anyone noticing. This discipline closes
+  that hole.
 
   After EVERY plan-update attempt, verify all of:
     1. The Edit tool returned success (no "stale read" / "file
@@ -170,19 +177,21 @@ STEP 3 — Dispatch the Executor.
   typically /tmp/worktrees/<project>/w-<id>-<slug> or a sibling dir.
 
   STATUS UPDATE — do this BEFORE spawning the Executor:
-    1. Edit the plan: flip W-item Status from `pending` (or `blocked`
+    1. Read the plan file fresh (syncs the Edit tool's hash — prevents
+       stale-read failure; see PLAN-WRITE DISCIPLINE).
+    2. Edit the plan: flip W-item Status from `pending` (or `blocked`
        if re-dispatching after a user-resolved blocker) to `in_progress`.
        Populate or update Branch with `w-<id>/<slug>`.
-    2. Update the summary table at the top of the plan to match.
-    3. Commit the plan update to dev:
+    3. Update the summary table at the top of the plan to match.
+    4. Commit the plan update to dev:
          git add docs/execution-plans/<active-plan>.md
          git commit -m "W-<id>: dispatch (pending → in_progress)"
          git push origin dev
-    4. Verify per PLAN-WRITE DISCIPLINE above. If any check fails, DO
+    5. Verify per PLAN-WRITE DISCIPLINE above. If any check fails, DO
        NOT spawn. Common causes: stale-read Edit failure (re-Read and
        re-apply), "nothing to commit" (the Edit silently didn't land),
        push rejected (concurrent session likely — surface to user).
-    5. THEN spawn the Executor.
+    6. THEN spawn the Executor.
     This order is non-negotiable. The pushed-and-verified commit is
     the guarantee the ledger is current.
 
@@ -269,6 +278,8 @@ STEP 4 — Run the peer gates.
     Do NOT merge.
 
     STATUS UPDATE — record the blocker in the ledger:
+      - Read the plan file fresh first (syncs the Edit tool's hash —
+        prevents stale-read failure; see PLAN-WRITE DISCIPLINE).
       - Edit the plan: flip W-item Status from `in_progress` to `blocked`.
       - Add a Notes line with the unresolved concern (1 line — point at
         the Executor's stumped return or the Reviewer's final concern).
@@ -375,6 +386,8 @@ STEP 5 — Merge + push + ledger update + auto-advance.
        an empty block is not.
 
     4. STATUS UPDATE — follow-up commit (never amend the merge):
+       - Read the plan file fresh first (syncs the Edit tool's hash —
+         prevents stale-read failure; see PLAN-WRITE DISCIPLINE).
        - Edit the plan: flip W-item Status from `in_progress` to `done`.
        - Update the summary table.
        - If the Reviewer returned `ship-with-concerns`, add the concerns
@@ -422,7 +435,9 @@ STEP 6 — Phase exit + promotion to main (when all W-items complete).
   4. Report QA verdict to the user — per-criterion pass/fail. Do NOT
      proceed without explicit user authorization ("promote" / "hold").
   5. On authorization:
-     a. Flip every phase W-item Status from `done` to `shipped`. Commit
+     a. Read the plan file fresh first (syncs the Edit tool's hash —
+        prevents stale-read failure; see PLAN-WRITE DISCIPLINE), then
+        flip every phase W-item Status from `done` to `shipped`. Commit
         on dev:
           git add docs/execution-plans/<active-plan>.md
           git commit -m "Phase <name>: all W-items → shipped"
