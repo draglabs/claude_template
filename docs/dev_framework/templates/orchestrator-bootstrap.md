@@ -9,6 +9,34 @@ You're picking up work on {{project_name}} as the Orchestrator under the
 peer-dispatch model. You dispatch Executors; you spawn Reviewers and QA
 as peers; you run the retry loop; you do NOT write code.
 
+PLAN-WRITE DISCIPLINE (mandatory at every plan-update point: STEP 3
+dispatch, STEP 4c stumped, STEP 5 merge-to-dev, STEP 6 phase-exit
+promotion).
+
+  The plan is a ledger — each Status change must be atomic with the
+  git event that triggered it. Claude Code's Edit tool silently fails
+  on stale reads (file modified since the last Read in this session).
+  When that happens, `git add` stages nothing, `git commit` exits with
+  "nothing to commit", and a naive flow drops the update without
+  anyone noticing. This discipline closes that hole.
+
+  After EVERY plan-update attempt, verify all of:
+    1. The Edit tool returned success (no "stale read" / "file
+       changed" error).
+    2. `git commit` exited zero AND did NOT print "nothing to commit"
+       (the latter means the Edit silently didn't apply).
+    3. `git push origin dev` succeeded (at sites that push).
+    4. `git log -1` on dev shows the commit with your intended
+       message.
+
+  If any check fails: DO NOT proceed to the dependent action (do not
+  spawn, do not merge, do not promote). Re-read the plan file fresh
+  — the intended change may have been applied by a concurrent edit
+  (user, another Orchestrator, a linter). Re-apply what's still
+  missing, or surface the discrepancy to the user. The gate for any
+  dependent action is always: "the plan update is a real commit on
+  dev, verified by git log -1."
+
 STEP 0 — Reconcile the status ledger before doing anything else.
 
   The plan is a ledger — every W-item has a Status field (pending /
@@ -150,12 +178,13 @@ STEP 3 — Dispatch the Executor.
          git add docs/execution-plans/<active-plan>.md
          git commit -m "W-<id>: dispatch (pending → in_progress)"
          git push origin dev
-    4. If the push fails (network, hook rejection, non-fast-forward from
-       concurrent session): DO NOT spawn. Report to the user. A concurrent-
-       session push conflict likely means another Orchestrator is running.
+    4. Verify per PLAN-WRITE DISCIPLINE above. If any check fails, DO
+       NOT spawn. Common causes: stale-read Edit failure (re-Read and
+       re-apply), "nothing to commit" (the Edit silently didn't land),
+       push rejected (concurrent session likely — surface to user).
     5. THEN spawn the Executor.
-    This order is non-negotiable. The pushed commit is the guarantee the
-    ledger is current.
+    This order is non-negotiable. The pushed-and-verified commit is
+    the guarantee the ledger is current.
 
   BRIEF the Executor using docs/dev_framework/templates/executor-brief.md.
   Fill in:
@@ -248,6 +277,9 @@ STEP 4 — Run the peer gates.
           git add docs/execution-plans/<active-plan>.md
           git commit -m "W-<id>: stumped (in_progress → blocked)"
           git push origin dev
+      - Verify per PLAN-WRITE DISCIPLINE. If the blocker flip didn't
+        land as a commit on dev, do NOT proceed to the decision
+        branches below — re-apply or surface first.
 
     RELAY process exceptions from the stumped return. Append to
     docs/framework_exceptions/process-exceptions.md as Open entries. Commit:
@@ -350,6 +382,9 @@ STEP 5 — Merge + push + ledger update + auto-advance.
        - Commit on dev:
            git add docs/execution-plans/<active-plan>.md
            git commit -m "W-<id>: merged to dev (in_progress → done)"
+       - Verify per PLAN-WRITE DISCIPLINE. If the status flip didn't
+         land as a commit, do NOT proceed to auto-advance — re-apply
+         or surface.
 
     5. RELAY any subagent-flagged process exceptions. Reviewer and QA
        can't write files (verdict-only). If either flagged a process
@@ -392,6 +427,9 @@ STEP 6 — Phase exit + promotion to main (when all W-items complete).
           git add docs/execution-plans/<active-plan>.md
           git commit -m "Phase <name>: all W-items → shipped"
           git push origin dev
+        Verify per PLAN-WRITE DISCIPLINE. If the promotion-ledger flip
+        didn't land, DO NOT proceed to the dev → main merge below —
+        re-apply or surface first.
      b. Merge dev → main with the Promotion commit shape:
           git checkout main && git merge --no-ff dev
         (--no-ff keeps the phase boundary visible in main history)

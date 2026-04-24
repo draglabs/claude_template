@@ -103,3 +103,9 @@ The Strategist communicates work to the Orchestrator via PRs:
 4. Standard execution flow from there (branch, build, review, merge, push).
 
 The Strategist writes good PR descriptions — these serve as the Orchestrator's execution briefs. Clean separation between "what to build" and "how to build it."
+
+### Plan amendments during a live phase
+
+When amending the active execution plan while the Orchestrator has W-items in flight, route the edit through a `planning:` PR — do NOT edit the plan directly on `dev`. Direct edits race with the Orchestrator's ledger writes (per-W-item status flips, merge-commit status updates, phase-exit promotions). Claude Code's Edit tool fails silently on stale reads, so whichever side reads-then-edits last can have its change land as an empty commit — the update appears to succeed and is silently dropped. Either the Strategist's amendment or the Orchestrator's status flip disappears; neither side notices.
+
+Race-free shape: create a `planning/<topic>-amendment` branch off `dev`, edit the plan there, open a `planning: amendment` PR. The Orchestrator merges at its next between-W-items point, after which the amendment is live in the ledger. This respects Orchestrator ownership of live ledger state and makes the amendment a reviewable, commit-visible event rather than a silent overwrite.
