@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "docker": {
+      "command": "npx",
+      "args": ["-y", "mcp-docker-server"]
+    },
+    "gitnexus": {
+      "command": "npx",
+      "args": ["-y", "gitnexus@latest", "mcp"]
+    }
+  }
+}

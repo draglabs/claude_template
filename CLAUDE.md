@@ -1,0 +1,109 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+**{{project_name}}** — {{one-line description}}.
+
+**Live at:** `{{sub}}.{{website}}.com` | **Dev at:** `{{sub}}.dev.{{website}}.com` | **Status:** {{current phase/status summary}}
+
+Project variables (fill these in, used across docs and QA briefs):
+- `{{sub}}` — this project's subdomain (e.g. `myapp`)
+- `{{website}}` — shared parent domain (e.g. `draglabs.com`)
+
+<!-- BEGIN FRAMEWORK MANAGED -->
+<!--
+  Everything between the FRAMEWORK MANAGED markers is overwritten on
+  every SessionStart by .claude/hooks/sync-framework.sh, which copies
+  this block verbatim from the template's CLAUDE.md. Do NOT edit here;
+  project-specific content belongs OUTSIDE these markers. If you need to
+  deviate from framework-managed content, record the deviation in
+  docs/framework_exceptions/dev_framework_exceptions.md. See ADR-014.
+-->
+
+## Roles (bootstrap trigger)
+
+**When the user types "you are a {role}" (or "you are the {role}"), you ARE that role.** Read the docs listed in your row below, follow your role doc's bootstrap steps, and report back with your understanding + confidence. Wait for user approval before doing substantive work.
+
+Every role also reads this file (CLAUDE.md) as Layer 0 — the always-loaded baseline. Deeper material loads by role (Layer 1) or on demand (Layer 2). Full layering rules in [`docs/dev_framework/context-management.md`](docs/dev_framework/context-management.md).
+
+| Say | Role | Reads on bootstrap |
+|---|---|---|
+| "you are the Strategist" | Strategist | [`docs/dev_framework/strategist.md`](docs/dev_framework/strategist.md) + [`dev_framework_exceptions.md`](docs/framework_exceptions/dev_framework_exceptions.md) + planning docs (plan, roadmap, future-directions). Does NOT load project `src/` |
+| "you are the Designer" | Designer | [`docs/dev_framework/designer.md`](docs/dev_framework/designer.md) + [`dev_framework_exceptions.md`](docs/framework_exceptions/dev_framework_exceptions.md) + main app UI components (read for reference) |
+| "you are the Orchestrator" | Orchestrator | [`docs/dev_framework/session-policy.md`](docs/dev_framework/session-policy.md) + [`dev_framework_exceptions.md`](docs/framework_exceptions/dev_framework_exceptions.md) + active plan from [`docs/execution-plans/`](docs/execution-plans/). Does NOT load `coding-standards.md` or project `src/` |
+| "you are the Template Developer" | Template Developer | [`docs/dev_framework/template-developer.md`](docs/dev_framework/template-developer.md) + [`docs/dev_framework/dev_framework.md`](docs/dev_framework/dev_framework.md) + [`dev_framework_exceptions.md`](docs/framework_exceptions/dev_framework_exceptions.md). **Only meaningful in the canonical `claude_template` repo** — adopter-repo framework changes go via PR against the template, not this role. |
+
+**SOP overview:** [`docs/dev_framework/dev_framework.md`](docs/dev_framework/dev_framework.md) — read this if you're not sure which role you are, or you need the big picture (subagent stack, PR-based handoff, context layering).
+
+**Project deviations from the SOP:** [`docs/framework_exceptions/dev_framework_exceptions.md`](docs/framework_exceptions/dev_framework_exceptions.md) — per-project overrides maintained by the Strategist. Every role loads this alongside CLAUDE.md at session start. The framework docs themselves are canonical and are not edited per-project; deviations go in the exceptions file, not into the framework.
+
+## Two process rules (every session)
+
+1. **Docs before code.** Architectural additions get documented by the Strategist and merged before the Orchestrator dispatches implementation. Enforced at the merge boundary by the Reviewer (`block` if no matching doc) and at the phase boundary by the Strategist's alignment audit.
+2. **CI-only deploys to production.** Production changes land via `git push origin main` → CI. Never from a laptop. Never via `docker exec`. Dev environment behavior depends on mode — see [`docs/dev_framework/dev-environment.md`](docs/dev_framework/dev-environment.md).
+
+## Branch model
+
+Feature branches merge to **`dev`**, dev promotes to **`main`** at phase boundaries. Full flow in [`docs/dev_framework/session-policy.md`](docs/dev_framework/session-policy.md) §"Branching and isolation" and [`docs/dev_framework/dev-environment.md`](docs/dev_framework/dev-environment.md).
+
+Code-level rules (TDD, no hardcoded lifecycle values, fail loudly) live in [`docs/dev_framework/coding-standards.md`](docs/dev_framework/coding-standards.md) and are enforced by the Executor (writing) and Reviewer (checking) subagent briefs. The Orchestrator and Strategist do NOT load that doc — they delegate enforcement to the subagent layer.
+
+## Framework sync on SessionStart
+
+On every session start (fresh, resume, `/clear`, `/compact`), two hooks run in order:
+
+1. `.claude/hooks/sync-framework.sh` — destructively syncs `docs/dev_framework/` and `.claude/hooks/` from the canonical `claude_template` repo, initializes `docs/framework_exceptions/` if missing, and refreshes this managed block. Adopters are expected to make changes ONLY in `docs/framework_exceptions/*`, never in `docs/dev_framework/*`. See [ADR-014](docs/architecture/adr-014-framework-sync-on-session-start.md).
+2. `.claude/hooks/session-reorient.sh` — injects a role re-orientation reminder tailored to the `source` of the reset. See [ADR-012](docs/architecture/adr-012-auto-reorient-hook.md).
+
+The template root is resolved via `$CLAUDE_TEMPLATE_ROOT` env var → `.env` file var → `../claude_template` sibling dir, in that order. If none resolve, sync is skipped with a warning.
+
+## MCP (.mcp.json)
+
+Claude Code expands env vars from its **own process env**, not `.env`. Export before starting:
+
+```bash
+set -a; source .env; set +a    # then run claude
+```
+
+Docker MCP is local-only. Never point it at production. Treat MCP servers the same as any other runtime component — adding one counts as an architectural addition (see "Docs before code" above).
+
+## Live references
+
+Query **Context7** (MCP) for library/framework docs before using training data. Clone external reference repos into `references/` — see [`references/README.md`](references/README.md).
+
+<!-- END FRAMEWORK MANAGED -->
+
+## Dev environment mode (project choice)
+
+**Dev environment mode for this project:** `{{local-hosted | remote-hosted}}` — fill in after the first Strategist interview resolves `adr-011-dev-environment.md`.
+
+## Commands
+
+```bash
+{{adapt to your project}}
+npm install              # dependencies
+npm run dev              # dev server
+npm run build            # production build
+npm run typecheck        # type check (CI gate)
+npm test                 # test suite (CI gate)
+./scripts/check-consistency.sh  # hardcode/drift check (CI gate)
+```
+
+## Stack
+
+**Status: undecided (stub).** See [`docs/architecture/stack.md`](docs/architecture/stack.md) for the decision matrix the Strategist walks through on first contact. Each row becomes an ADR in [`docs/architecture/`](docs/architecture/).
+
+## Locked-in decisions
+
+No decisions locked yet — project is in stub state. See [`docs/architecture/adr-000-starter-stub.md`](docs/architecture/adr-000-starter-stub.md) for why.
+
+As ADRs accept, add a one-line summary here with a link to the ADR. Example:
+```
+- Postgres 16 over MySQL — [ADR-004](docs/architecture/adr-004-database-prod.md)
+```
+
+## Consistency checks
+
+`scripts/check-consistency.sh` runs in CI and catches bare IPs, silent env fallbacks, hardcoded localhost URLs, and hardcoded container names in source code. Add project-specific patterns in the CUSTOM CHECKS section of the script.

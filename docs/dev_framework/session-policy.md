@@ -1,0 +1,349 @@
+# Session policy
+
+**Source of truth for how a Claude Code session executes work on this repo.** Linked from `CLAUDE.md`; editable directly without touching CLAUDE.md.
+
+Applies to any session (Opus or Sonnet) driving work items from [execution-plans/](../execution-plans/) or equivalent phase plans.
+
+**Project deviations** from this policy live in [`dev_framework_exceptions.md`](../framework_exceptions/dev_framework_exceptions.md), maintained by the project's Strategist. Every agent reads that file alongside CLAUDE.md. This policy doc is canonical — it is not edited per-project.
+
+## Roles
+
+| Role | Played by | Responsibility |
+|---|---|---|
+| **Orchestrator** | The active Claude Code session. | **Dispatcher + merger + review coordinator.** Picks the next W-item, pre-creates the worktree off `origin/dev`, dispatches Executor, then spawns Reviewer and (when required) QA as peer subagents, owns the retry loop, merges, pushes. Does NOT write code. Does NOT open diffs or `src/` directly — reads Reviewer/QA verdicts instead (which may cite `file:line`). |
+| **Executor** | Sonnet subagent spawned via Agent tool by the Orchestrator. | **Writer.** Writes code + tests in a pre-created worktree, commits to the feature branch, returns a code-only package to the Orchestrator. Does NOT spawn Reviewer or QA. Does NOT merge or push. |
+| **Reviewer** | Opus subagent spawned via Agent tool **by the Orchestrator**. | Reviews the Executor's diff against canonical docs + coding standards. Returns verdict + concerns to the Orchestrator. Does not modify files. |
+| **QA** | Sonnet subagent spawned via Agent tool **by the Orchestrator** — per-W-item (pre-merge) or at phase exit. | Runs end-to-end tests against a pre-merge worktree build or the live dev environment. Returns structured pass/fail to the Orchestrator. Cleans up test artifacts on success. |
+| **Doc Consultant** | Sonnet subagent spawned by any role. | Reads the doc corpus and answers a targeted question. Returns a short citation-backed answer. Does not modify files. |
+| **Code Consultant** | Sonnet subagent spawned primarily by the Strategist. | Reads code and answers a targeted question. Returns a short citation-backed answer. Does not modify files. |
+
+Briefing templates for each subagent role live in [`templates/`](templates/). Load them when spawning a subagent — not at session start.
+
+**Hard constraint of the runtime: subagents cannot spawn subagents.** Confirmed by Anthropic's Agent SDK docs and by GitHub issue history. Under this policy every subagent is a peer under the Orchestrator. See [ADR-013](../architecture/adr-013-peer-dispatch.md) for the decision record.
+
+### Dispatch flow
+
+```
+User ↔ Orchestrator
+           │
+           ├─▶ Executor (Sonnet, worktree)  ── code-only return ───▶ Orchestrator
+           │
+           ├─▶ Reviewer (Opus)              ── verdict + concerns ─▶ Orchestrator
+           │       │
+           │       └─ on block: Orchestrator re-dispatches Executor
+           │         with concerns as sharpened brief, then re-spawns
+           │         Reviewer. Consumes one retry.
+           │
+           ├─▶ QA (Sonnet, when required)   ── verdict + results ──▶ Orchestrator
+           │       │
+           │       └─ on fail: same retry loop, Orchestrator dispatches
+           │         fresh Executor with QA findings; re-runs Reviewer
+           │         then QA. Consumes one retry.
+           │
+           ▼ on ship + pass (or retry cap + escalation)
+       Orchestrator ──▶ merge to dev ──▶ push ──▶ auto-advance
+                                                    │
+                (at phase boundary + user OK) ──────┘
+                                │
+                                ▼
+                        merge dev → main → production CI deploy
+```
+
+Sequential by design: Reviewer first, QA only after `ship`. Parallel execution would waste QA cycles on code that's about to change.
+
+## Tiered execution pattern
+
+All tiers use the same peer-dispatch flow. Tiers differ only in **which gates are mandatory** and **how many retries the Orchestrator gets before escalating**.
+
+"Retries" means attempts **after** the initial write. `retries: 2` means: write → Reviewer (+ QA), and if blocked, up to 2 more (fresh Executor with concerns → Reviewer + QA) loops.
+
+| Tier | Bucket | Executor | Reviewer | QA | Retries | Total loops | Notes |
+|---|---|---|---|---|---|---|---|
+| **XS** | Easy | Sonnet, worktree | Opus (required) | Skip unless 🧪 | 2 | 3 | Trivial edits. |
+| **S** | Easy | Sonnet, worktree | Opus (required) | Skip unless 🧪 | 2 | 3 | |
+| **M** | Unknown tier | Sonnet, worktree | Opus (required) | Skip unless 🧪 | 2 | 3 | Ambiguous effort — same budget as easy by default. |
+| **L** | Hard | Sonnet, worktree | Opus (required) | Required | 3 | 4 | |
+| **XL** | Hard | Sonnet, worktree | Opus (required) | Required | 3 | 4 | Split if > 4h. |
+| ⚠️ override | — | Sonnet, worktree | Opus (required) | Required (forced) | 3 | 4 | Locks to Hard regardless of base tier. |
+
+**Every W-item** gets a worktree + a feature branch (`w-<id>/<slug>`). Nothing lands on `dev` except via Orchestrator merge after all required gates pass.
+
+### How the retry budget is used
+
+- **Initial attempt:** Orchestrator dispatches Executor; Executor writes, commits, returns. Orchestrator spawns Reviewer. Orchestrator spawns QA if required. This initial cycle is NOT a retry.
+- **Each retry:** Reviewer `block` or QA `fail` triggers Orchestrator to dispatch a fresh Executor with the concerns verbatim as sharpened context, then re-spawn Reviewer (and QA if required). One fix cycle consumes one retry.
+- **Exhaustion:** on retry cap reached with an unresolved block, Orchestrator escalates to the user (see §"When to escalate to the user"). The W-item flips to `blocked` in the plan.
+- A fix that satisfies Reviewer but breaks QA (or vice versa) still counts as one retry, not two. One fresh-Executor dispatch = one retry regardless of which gate failed.
+
+### Orchestrator-owned retry mechanics
+
+Retry state lives in the Orchestrator session; it is NOT written to the plan ledger. The plan records only Status transitions (`pending` → `in_progress` → `blocked` / `done` / `shipped`) — retry counts are ephemeral.
+
+When the Orchestrator dispatches a fresh Executor for a retry, the brief includes:
+- The feature branch name (worktree already exists; Executor checks out the existing commits).
+- The full verbatim concerns from the Reviewer (or QA) that caused the block.
+- A one-line instruction: "address these concerns; do not reopen the original scope."
+
+The Executor writes a new commit on top of the existing ones — **no rebase, no amend.** The Reviewer reads history; the chain of fix-commits shows the loop's work.
+
+**SendMessage is not available in the Claude Code CLI runtime.** Retries are always fresh Agent-tool invocations, not continuations of a prior Executor. The Executor's context is rebuilt from the brief each time. This is the canonical mechanism; it is not optimization for a rainy day.
+
+### Escalation
+
+The Orchestrator relays to the user on:
+
+- Retry cap exhausted with an unresolved block or fail.
+- Executor returned "brief ambiguity at confirm" — no code produced, the brief needs judgment the Orchestrator can't provide.
+- A sensitive surface is implicated (auth, keys, billing, data migration) and the Reviewer flagged architectural concern.
+- A single W-item has consumed substantially more than its effort-estimate budget (> 50% over) in Orchestrator dispatch time.
+
+The Orchestrator does NOT escalate when:
+
+- All gates passed within the retry cap (user doesn't need to see the intermediate blocks).
+- One retry fixed the concern cleanly.
+
+## Status ledger (non-negotiable)
+
+The Orchestrator owns the status of every W-item on the active execution plan. Status updates are **atomic with the git events that trigger them**:
+
+- Dispatch first Executor on a W-item → flip `pending` → `in_progress`, populate Branch. Commit the plan update **before** spawning the Executor. No "update later."
+- All gates passed → flip `in_progress` → `done` alongside the merge commit.
+- Retry cap exhausted → flip `in_progress` → `blocked` with a Notes line naming the unresolved concern. Commit.
+- Phase-exit promotion → flip every promoted W-item from `done` → `shipped` in the same commit as the `dev` → `main` merge.
+
+A retry dispatch does NOT transition Status — the W-item stays `in_progress` across retries. Retry count is Orchestrator-internal.
+
+Full state machine + transition rules are in [`../execution-plans/README.md`](../execution-plans/README.md) §"Status state machine."
+
+### Why this matters
+
+The plan is a ledger. A stale ledger causes:
+- Fresh Orchestrator sessions re-dispatch work that's already in flight.
+- Phase-exit gates pass over done-but-unmarked items, leaving them un-shipped.
+- The user loses visibility into whether the system is working or stuck.
+
+A ledger that lies is worse than no ledger — future sessions act confidently on bad data.
+
+### CLAUDE.md is NOT a live dashboard
+
+CLAUDE.md's Status line is a one-liner ("Phase 2 active, stream A in flight") pointing at the active execution plan. It does NOT list per-W-item state. If you catch yourself editing W-item status in CLAUDE.md, stop — that belongs in the plan doc.
+
+### Reconciliation on session start
+
+On Orchestrator bootstrap, STEP 0 reconciles the ledger against git reality. See [`templates/orchestrator-bootstrap.md`](templates/orchestrator-bootstrap.md) STEP 0. If the plan says `pending` but a branch with commits exists, or if the plan says `in_progress` on a branch that's been deleted, the Orchestrator surfaces the discrepancy to the user before dispatching anything new.
+
+## Auto-advance after merge
+
+After merging to **`dev`** and pushing (and after flipping the W-item Status to `done`), **immediately orient on the next W-item**. No "Ready for your go?" pause.
+
+**Pause only if:**
+- Retry cap was exhausted and the W-item flipped to `blocked`.
+- Next item has unresolved dependencies.
+- Orchestrator confidence is `low`.
+- User explicitly asked to pause.
+- Dev-branch CI (remote-hosted mode) is still running or has reported failure — wait for green before starting the next item, so dev doesn't accumulate broken commits.
+
+**Auto-advance does NOT apply to promotion to main.** After merging `dev` → `main`, pause. Wait for production CI confirmation; wait for the user to confirm prod landed cleanly before starting the next phase.
+
+## Mandatory overrides
+
+- **⚠️ items** — Opus review is already the default. ⚠️ additionally forces QA regardless of tier and bumps the retry cap to 3.
+- **🔍 items** — The Orchestrator runs the spike directly (research, not code). 2h max. No Executor dispatch. Validate conclusions in the real runtime environment, not simplified tests. This is the ONE case where the Orchestrator touches content, because there's no diff to produce.
+- **🧪 items** — QA required regardless of tier. Orchestrator dispatches QA after Reviewer ships.
+- **Parallel execution** — only for dependency-graph-independent W-items. Orchestrator can run multiple concurrent W-items, each with its own worktree + its own peer chain (Executor, Reviewer, optional QA). Practical cap ~3 concurrent W-items: with per-item peer dispatch, 3-wide parallelism is already 6–9 concurrent subagents. More risks confused diagnosis when something fails.
+- **Doc questions → Doc Consultant, not inline reads.** When the Orchestrator needs to check a locked decision, cross-reference acceptance criteria, or verify a constraint, spawn a Doc Consultant subagent instead of reading the docs inline. The Consultant's 10-line answer costs far less context than loading 3 full docs. Exception: docs already loaded at session start (Layer 1).
+- **Strategist code questions → Code Consultant.** The Strategist does not load project `src/`. When it needs a code-level fact to approve a plan or verify a claim, it spawns a Code Consultant subagent.
+- **Code-quality rules live in the subagent layer.** The Orchestrator does not carry `docs/dev_framework/coding-standards.md`. TDD, no-hardcoded-values, and fail-loudly enforcement happens in the Executor brief (authoring) and Reviewer brief (blocking merge). If a Reviewer returns `ship` on code that violates the standards, that's a Reviewer bug — file an execution incident.
+
+## Trust but verify
+
+Under peer dispatch, the Orchestrator called each subagent itself. Provenance is mechanical — the Agent tool results are in the Orchestrator's own message history, each with an `agentId`. Fabrication of a verdict is impossible by construction.
+
+On each subagent return the Orchestrator checks:
+
+1. **Executor return.** Confirms the worktree branch exists and matches the claimed `w-<id>/<slug>` name. Reads the 1-line diff summary and the Files touched list. Flags scope creep (files outside the brief's Touches) — this is the one code-level check the Orchestrator does, because the Reviewer hasn't run yet.
+2. **Reviewer return.** Reads the verdict (`ship` / `ship-with-concerns` / `block`) and the per-question answers. On `block`, reads the listed concerns — they become the next Executor's brief.
+3. **QA return (when required).** Reads the verdict and per-criterion results. On `fail`, reads the precise file:line or behavior hint — that becomes the next Executor's brief.
+
+The Orchestrator does NOT open diffs or source files directly. Verdicts cite `file:line`; the Orchestrator reads the citations as evidence, not the code itself. Code reading remains bounded to Executor and Reviewer contexts.
+
+## Orchestrator model choice
+
+Under peer dispatch the Orchestrator sees Reviewer and QA verdicts inline — per-question answers, per-criterion results — which is more context than the old 6-line pass packages of earlier models. **Opus** is preferred when retry judgment is likely to matter (⚠️ density, ambiguous Reviewer concerns, scope-creep calls). **Sonnet** remains sufficient for phases of routine W-items where most items ship on first pass.
+
+## Branching and isolation (dev → main)
+
+This project uses a **dev branch** between feature branches and main. Features merge to dev; dev promotes to main at phase boundaries.
+
+```
+feature (w-<id>/<slug>)  ──Orchestrator merge──▶  dev  ──phase-exit promotion──▶  main
+                                                   │                               │
+                                                   ▼                               ▼
+                                     CI deploys to dev env            CI deploys to production
+                             (local: no deploy; remote: dev server)   (always remote)
+```
+
+See [`dev-environment.md`](dev-environment.md) for local vs remote dev mode.
+
+Every W-item follows one flow:
+
+1. **Orchestrator** pre-creates the worktree explicitly off `origin/dev` with `git worktree add -b w-<id>/<slug> <path> origin/dev`, then dispatches the Executor via the Agent tool (WITHOUT the `isolation: "worktree"` flag — the Orchestrator owns worktree creation under this model). The Executor works inside the pre-created worktree.
+
+   **Mechanism, not intention.** The Agent tool's `isolation: "worktree"` flag creates a worktree from the parent session's current HEAD. If the Orchestrator happens to be sitting on `main` (or any other branch) when it dispatches, the worktree — and therefore the feature branch — inherits THAT base. Rule compliance here requires the Orchestrator to pre-create the worktree off `origin/dev` explicitly so the base becomes a literal command-line argument. "I read the rule" is not enforcement. The command is.
+
+2. **Executor** writes code + tests inside the worktree, commits to the feature branch, returns a code-only package to the Orchestrator.
+
+3. **Orchestrator** spawns the Reviewer (Opus) as a peer Agent-tool call, passing the worktree path and the latest commit SHA. On `block`, Orchestrator dispatches a fresh Executor with the concerns and re-spawns the Reviewer. Retry cap per tier.
+
+4. **Orchestrator** (if tier L/XL or marker 🧪 or ⚠️) spawns the QA as a peer Agent-tool call after Reviewer ships. Same retry pattern on `fail`.
+
+5. **Orchestrator** verifies the return per §"Trust but verify", merges the feature branch to **`dev`**, pushes `dev`. If remote-hosted dev, CI now deploys to `{{sub}}.dev.{{website}}.com`. Auto-advance to next W-item.
+
+Main is NOT touched per W-item. Main only moves at phase-boundary promotion (see §"Phase exit gate" below).
+
+### Commit authorship
+
+Merge commit on **`dev`** (per W-item). The **Lessons learned** block is required — pasted verbatim from the Executor's pass shape. This is the user's primary post-hoc visibility into what the Executor experienced.
+
+```
+Merge w-a2/some-feature: short description
+
+<diff 1-line summary from Executor>
+
+Executor: Claude Sonnet (worktree-isolated)
+Reviewer: Claude Opus, <verdict>
+QA: Claude Sonnet, <pass | n/a>
+Retries used: <n>/<retries>
+
+Lessons learned:
+  - <bullet from Executor pass shape, verbatim>
+  - <bullet>
+
+Co-Authored-By: Claude Sonnet <noreply@anthropic.com>
+Co-Authored-By: Claude Opus <noreply@anthropic.com>
+```
+
+If the Executor's return came back without Lessons learned, the Orchestrator bounces back and asks — does NOT merge with an empty block. (Exception: Executor wrote "Nothing surprising." That's a valid Lessons-learned value.)
+
+### Promotion commit (dev → main)
+
+At phase exit, after QA passes on the dev environment and the user authorizes, the Orchestrator merges `dev` → `main`. Use a single annotated merge commit:
+
+```
+Promote dev → main: <phase name> complete
+
+W-items included: <list of w-ids>
+Phase-exit QA: pass (targeted {{sub}}.dev.{{website}}.com)
+Authorized by: <user | Strategist on user's behalf>
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+No auto-advance on this commit — the Orchestrator pauses after a main push to let the user confirm production deploy landed cleanly before starting the next phase.
+
+## Phase exit gate (and promotion to main)
+
+All W-items done is necessary but not sufficient. Phase exit under the dev-branch model requires **demonstrating every exit criterion live on the dev environment**, then promoting dev → main.
+
+### Steps
+
+1. Confirm every W-item in the phase is merged to `dev` (no `blocked` items outstanding).
+2. Run the full test suite against `dev` — all green.
+3. Apply all pending migrations (on the dev environment or locally if local-hosted).
+4. Push `dev` to origin (if any unpushed commits). Wait for dev-branch CI to pass.
+5. **Orchestrator spawns a QA subagent against `{{sub}}.dev.{{website}}.com`** (this is the same peer-dispatch pattern as per-W-item QA; spawn context is "phase exit"). Record pass/fail per criterion.
+6. Report per-criterion results to the user. **Explicit user authorization required to proceed.** The user sees the QA verdict; the user says "promote" or "hold."
+7. On authorization: Orchestrator merges `dev` → `main` (annotated merge commit per §"Promotion commit"), pushes `main`. Production CI deploys.
+8. Optional post-promotion smoke test against production URL (`{{sub}}.{{website}}.com`). Strongly recommended for phases that touched critical paths (auth, billing, data migration). Not mandatory.
+
+### Failure modes
+
+- **Criteria fail on dev** → re-open the failing W-ids. Fix on dev. Re-run the gate. No promotion yet.
+- **Criteria pass on dev, user withholds authorization** → not a failure, just a hold. Dev continues to accumulate W-items if there are follow-ups; main stays where it is.
+- **CI fails on `main` after promotion** → unusual (dev CI already passed), but possible if prod environment differs from dev. Revert on main; investigate the divergence; document in `execution-incidents.md`.
+
+### Why user authorization is explicit here
+
+Every W-item merge to dev is automated (Orchestrator decides). Every promotion to main is a user decision. This is the single point where human judgment gates production.
+
+## When to escalate to the user
+
+The Orchestrator relays to the user when:
+
+- Retry cap exhausted on a W-item with an unresolved concern.
+- A W-item returned with architectural ambiguity the Orchestrator cannot resolve (locked-decision collision, plan contradiction, scope ambiguity).
+- A sensitive surface (auth, keys, billing, data migration) surfaced a Reviewer concern the retry loop couldn't close.
+- A W-item consumed substantially more than the effort-estimate budget (> 50% over).
+- A spike (🔍) diverged from the expected approach.
+
+The Orchestrator does NOT escalate when:
+
+- All gates passed within the retry cap — merge, auto-advance, no interruption.
+- A single retry closed the concern cleanly.
+
+## Automatic re-orientation on context resets
+
+Claude Code loses context on four paths: fresh startup, `--resume`, manual `/clear`, automatic or manual `/compact`. Two `SessionStart` hooks fire on all four — wired in `.claude/settings.json`, runs in order:
+
+1. **`.claude/hooks/sync-framework.sh`** — destructively syncs `docs/dev_framework/` and `.claude/hooks/` from the canonical `claude_template` repo, initializes `docs/framework_exceptions/` if missing, and refreshes the framework-managed block of CLAUDE.md. See §"Framework sync on context resets" below and [ADR-014](../architecture/adr-014-framework-sync-on-session-start.md).
+2. **`.claude/hooks/session-reorient.sh`** — injects a role re-orientation instruction tailored to the reset `source`. The hook routes by source and tells the session which docs to re-read and — for Orchestrators — to run the ledger reconciliation before dispatching. See [ADR-012](../architecture/adr-012-auto-reorient-hook.md).
+
+Both are mechanical enforcements of rules that used to be English-only: "re-read the SOP after context loss" and "keep the framework canonical." Each one is a command, not a hope.
+
+Hooks are canonical to the template; projects that adopt the template inherit them automatically through the framework sync itself. Project-specific deviations go in [`dev_framework_exceptions.md`](../framework_exceptions/dev_framework_exceptions.md), not by editing the hooks.
+
+**After `/compact` or `/clear`, send a one-word trigger** (`ack`, `continue`, `role?`) to get the session to re-orient. Claude Code is turn-reactive: SessionStart hooks inject the re-orientation text into Claude's context, but Claude cannot produce a message without a user turn. The first user message after a reset is what triggers the acknowledgement and any role question. This is a Claude Code platform constraint, not a framework choice — see ADR-012 §"What this does NOT do".
+
+## Framework sync on context resets
+
+`docs/dev_framework/*` is canonical — it is maintained in the `claude_template` source repo and copy-pasted into every adopting project. The sync hook enforces this:
+
+- **Template root discovery:** `$CLAUDE_TEMPLATE_ROOT` env var → `.env` file var → `../claude_template` sibling dir, in priority order. Missing root: hook warns and skips.
+- **Template-self detection:** if the current project's resolved path equals the template root's, the hook reports "no sync needed" and exits. This repo is safe from syncing onto itself.
+- **Destructive sync of `docs/dev_framework/`** via `rsync -a --delete` — any local edits are silently overwritten. Adopters who need framework changes open a PR against the template repo, not against their local copy.
+- **Destructive sync of `.claude/hooks/`** via the same pattern — hooks are part of the canonical machinery.
+- **Idempotent init of `docs/framework_exceptions/`** from pristine stubs at `$TEMPLATE_ROOT/docs/dev_framework/_stubs/framework_exceptions/`. Only files that don't exist get created; existing files are preserved.
+- **CLAUDE.md managed-block reconciliation.** The block between `<!-- BEGIN FRAMEWORK MANAGED -->` and `<!-- END FRAMEWORK MANAGED -->` in the local CLAUDE.md is replaced with the template's corresponding block. Content outside those markers is never touched.
+- **Failure posture:** every step warns and continues on error. Framework sync is value-add, never a blocker for session start.
+
+See [ADR-014](../architecture/adr-014-framework-sync-on-session-start.md) for rationale, alternatives considered, and acceptance criteria.
+
+## Policy propagation
+
+- **New sessions:** CLAUDE.md points here. Policy edits take effect at next session.
+- **Current session:** user prompts "policy updated, reread" → session fetches.
+- **Review cadence:** every phase boundary, check if the dispatch pattern is paying off — measure retry rates, escalation rates, time-per-W-item.
+
+## When to suspend this policy
+
+### Emergency bypass (production fire)
+
+Peer-dispatch discipline is for normal operations. When production is on fire and the fix is small and obvious, the user can invoke emergency bypass with: **"skip review, just ship it."**
+
+Under bypass:
+
+1. **Orchestrator writes directly to `main`.** Skip dev entirely — dev-branch discipline is about orderly integration, not fire suppression. Commit goes straight to main; CI deploys to production. This is the single explicit exception to "Orchestrator doesn't write code."
+2. **Commit with a `[bypass]` tag** in the first line, plus a one-line reason:
+   ```
+   [bypass] Fix null-deref on /api/login — prod error rate spike
+
+   Reason: blocking all logins as of <timestamp>. Peer-dispatch review
+   + dev-branch suspended per user request. Retrospective Reviewer
+   within 24h. Back-merge to dev planned so dev doesn't drift behind
+   main.
+   ```
+3. **Back-merge to dev immediately after bypass lands.** `git checkout dev && git merge main`. Without this, dev is missing the fix and the next W-item will either lose it or collide with it. Back-merge is mandatory, not optional.
+
+   **Race note:** if an Executor is mid-flight when the bypass lands, let it complete. Its feature branch was based on pre-bypass dev, and its Reviewer ran against pre-bypass state. After the Executor's merge to dev, dev-CI (remote-hosted) or a quick local smoke (local-hosted) re-verifies the combined state. The auto-advance rule already gates the next W-item on dev-CI green. If dev-CI fails, treat it as a normal red-dev incident and fix on dev.
+4. **Within 24h, Orchestrator spawns a retrospective Reviewer** on the bypass commit (use the Reviewer brief as-is, pass the commit SHA instead of a worktree path). This is the same peer-dispatch call as a normal Reviewer spawn — the emergency path uses the standard mechanism, not a bespoke one. Two outcomes:
+   - **`ship` or `ship-with-concerns`** — log the Reviewer verdict as a follow-up commit or annotation. Discipline is restored.
+   - **`block`** — the bypass introduced a new problem. Open a cleanup W-item in the active plan with the Reviewer's concerns as acceptance criteria, and run it through normal dev-branch flow.
+5. **Log the bypass in `execution-incidents.md`.** Every bypass is an incident by definition — the process failed to be fast enough to handle a real need. Incidents feed policy improvement.
+
+Bypass is explicit and ugly on purpose. The `[bypass]` tag makes it searchable. The 24h retrospective is a forcing function. If bypasses are happening more than a few times a quarter, the dispatch pattern isn't fitting the reality and needs policy review.
+
+### Other suspensions
+
+- **Editing this policy** — user approves directly.
+- **🔍 spikes** — Orchestrator runs directly per §Mandatory overrides. Not a bypass — spikes are research, not code that ships.
+- **Per-project deviations** — live in [`dev_framework_exceptions.md`](../framework_exceptions/dev_framework_exceptions.md), not inline here. If the project needs a sustained variation, record it there with a mechanism; don't fork this doc.

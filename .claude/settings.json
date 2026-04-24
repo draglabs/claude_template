@@ -1,0 +1,94 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh *)",
+      "Bash(scp *)",
+      "Bash(rsync *)",
+
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(dig *)",
+      "Bash(nslookup *)",
+      "Bash(openssl *)",
+
+      "Bash(docker *)",
+      "Bash(docker compose *)",
+      "Bash(systemctl *)",
+
+      "Bash(git *)",
+      "Bash(gh *)",
+
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(node *)",
+      "Bash(nvm *)",
+      "Bash(pnpm *)",
+      "Bash(bun *)",
+      "Bash(yarn *)",
+
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "Bash(pip *)",
+
+      "Bash(jq *)",
+      "Bash(yq *)",
+      "Bash(awk *)",
+      "Bash(sed *)",
+      "Bash(zip *)",
+      "Bash(unzip *)",
+      "Bash(tar *)",
+      "Bash(mkdir *)",
+      "Bash(touch *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(chmod *)",
+      "Bash(chown *)",
+      "Bash(ln *)",
+
+      "Bash(source *)",
+      "Bash(until *)",
+      "Bash(while *)",
+      "Bash(for *)",
+
+      "Bash(claude mcp *)",
+      "Bash(claude -h)",
+      "Bash(claude --help)",
+      "Bash(claude --version)",
+
+      "mcp__Claude_Preview__preview_screenshot",
+      "mcp__Claude_Preview__preview_start",
+      "mcp__Claude_Preview__preview_stop",
+      "mcp__Claude_Preview__preview_eval",
+      "mcp__Claude_in_Chrome__navigate",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "mcp__Claude_in_Chrome__computer",
+      "mcp__Claude_in_Chrome__javascript_tool",
+
+      "Read(//Users/david/Documents/code/**)",
+      "Read(//tmp/**)",
+      "Read(//private/tmp/**)",
+      "Read(//opt/**)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'printf \"%s canary fired cwd=%s stdin=\" \"$(date -u +%FT%TZ)\" \"$PWD\" >> /tmp/claude-sessionstart.log; cat >> /tmp/claude-sessionstart.log; printf \"\\n\" >> /tmp/claude-sessionstart.log'"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/sync-framework.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/session-reorient.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

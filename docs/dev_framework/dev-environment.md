@@ -1,0 +1,111 @@
+# Dev environment
+
+How this project's dev-branch code becomes something a QA subagent can test. Every project running on this template picks one of two modes; the rest of the framework stays identical either way.
+
+## Naming convention (fixed)
+
+The dev URL is always `{{sub}}.dev.{{website}}.com` where:
+- `{{sub}}` — this project's subdomain (project-scoped; set in CLAUDE.md)
+- `{{website}}` — the shared parent domain (org-scoped)
+
+Example: `myapp.dev.draglabs.com`. Every project that uses this template follows the same shape so the Strategist and QA always know where to point without a per-project lookup.
+
+## The two modes
+
+| | **Local-hosted dev** | **Remote-hosted dev** |
+|---|---|---|
+| Where dev runs | User's machine | A real server (VPS, Fly, Cloudron, …) |
+| Push to `dev` branch | No deploy. User runs `docker compose up` locally. | CI deploys to the dev server. |
+| QA target | `{{sub}}.dev.{{website}}.com` (resolves to localhost via local redirect) | `{{sub}}.dev.{{website}}.com` (resolves to dev-server IP via wildcard DNS) |
+| Infra cost | Zero beyond user's machine | A server + DNS + CI deploy path |
+| When to pick | Solo dev, early stage, iteration-heavy | Multiple contributors, stable architecture, QA needs to run while laptop is closed |
+
+The choice is an ADR — see `docs/architecture/stack.md` "Dev environment hosting" row.
+
+## Branch flow (both modes)
+
+```
+┌────────────────────────┐
+│  feature branch        │
+│  w-<id>/<slug>         │
+└────────────┬───────────┘
+             │ Orchestrator merges after Executor pass
+             ▼
+┌────────────────────────┐        CI on push:
+│  dev                   │  ───▶  LOCAL:  no deploy (user runs locally)
+│                        │  ───▶  REMOTE: deploy to dev server
+└────────────┬───────────┘
+             │ Phase-boundary promotion
+             │ (user/Strategist authorizes after QA passes on dev)
+             ▼
+┌────────────────────────┐        CI on push:
+│  main                  │  ───▶  deploy to production
+└────────────────────────┘
+```
+
+## Orchestrator's role in first-time setup
+
+On a fresh project, the first-time dev-environment setup is **bootstrap work, not a W-item**. The Orchestrator runs it directly — one-time orientation with no diff to produce — similar to how 🔍 spikes are handled. No Executor dispatch, no Reviewer gate.
+
+The trigger: user starts the first Orchestrator session, says "set up the dev environment." Orchestrator reads this doc and the ADR, then walks the user through the chosen mode.
+
+### Local-hosted bootstrap walkthrough
+
+The goal: `curl https://{{sub}}.dev.{{website}}.com` from the user's laptop hits the local dev server.
+
+1. **Confirm project variables.** Read `{{sub}}` and `{{website}}` from CLAUDE.md. If they're still placeholders, prompt the user to fill them in first.
+2. **Pick a DNS strategy.**
+   - **Option i — `/etc/hosts` entry.** Simplest. Add `127.0.0.1  {{sub}}.dev.{{website}}.com` to `/etc/hosts`. Works, but each new subdomain needs a new entry. Good for single-project.
+   - **Option ii — wildcard via local DNS.** Tools like `dnsmasq` (Linux/macOS) or `Acrylic` (Windows) resolve `*.dev.{{website}}.com` → `127.0.0.1`. Better when the user works on multiple projects under the same `{{website}}`.
+   - **Option iii — owned domain with DNS wildcard.** If the user owns `{{website}}.com` at a registrar, add a `*.dev` wildcard A record → `127.0.0.1`. Works from anywhere with no local config, but exposes project names in DNS queries.
+3. **Set up TLS (if HTTPS needed).** `mkcert` is the standard. Install mkcert, run `mkcert -install`, then `mkcert "{{sub}}.dev.{{website}}.com" "*.dev.{{website}}.com"` for a local-trusted cert. Put the cert + key somewhere the reverse proxy reads them.
+4. **Reverse proxy routing.** If multiple projects share the `.dev.{{website}}.com` parent, use a single Caddy/Traefik/nginx config at e.g. `:443` that routes each subdomain to the matching project's local port. Example Caddy:
+   ```caddy
+   {{sub}}.dev.{{website}}.com {
+     tls /path/to/cert.pem /path/to/key.pem
+     reverse_proxy localhost:3000
+   }
+   ```
+   For a single project, the app itself can bind to `:443` with the cert and skip the proxy.
+5. **Smoke test.** `curl -k https://{{sub}}.dev.{{website}}.com/` should return the hello-world response once the stub is running. If it doesn't, debug before declaring setup done.
+6. **Document.** Orchestrator adds a short "Local dev redirect is configured via X (hosts file / dnsmasq / wildcard DNS)" note to the ADR so future sessions know the specifics.
+
+### Remote-hosted bootstrap walkthrough
+
+The goal: `curl https://{{sub}}.dev.{{website}}.com` from anywhere hits the remote dev server, fresh with whatever was last pushed to `dev`.
+
+1. **Confirm project variables** (same as local, step 1).
+2. **Dev server provisioned.** If one doesn't exist, that's a prerequisite — escalate to user. Don't provision infrastructure from the Orchestrator; this is a one-time user decision, often involving billing.
+3. **Wildcard DNS.** `*.dev.{{website}}.com` → dev-server IP, at the registrar or DNS provider. Orchestrator can confirm via `dig` but doesn't edit DNS records.
+4. **TLS certificate.** Let's Encrypt wildcard (`*.dev.{{website}}.com`) via DNS-01 challenge. Caddy/Traefik on the dev server handles this automatically if pointed at the right DNS provider API.
+5. **CI deploy to dev.** Add a GitHub Actions (or equivalent) workflow: `on: push: branches: [dev]` builds the image and deploys to the dev server. Exact mechanism is project-specific (rsync + systemctl, `docker pull` on server, Cloudron app update, …). Record the chosen mechanism in the ADR.
+6. **Smoke test.** Same as local — `curl` the URL, expect hello world. CI passing is not sufficient; confirm the URL actually serves the current dev commit.
+7. **Document.** Orchestrator adds deploy mechanism + server identity to the ADR.
+
+## Why the Orchestrator (not an Executor) for bootstrap
+
+Under peer dispatch, the Orchestrator dispatches Executors for all code work. Bootstrap is different:
+
+- **Interactive with the user.** The Orchestrator is already in conversation with the user; an Executor subagent isn't. Setup requires back-and-forth ("which DNS strategy?", "do you want mkcert or real LE?") that a one-shot Executor brief can't handle.
+- **No diff to produce.** Most of the setup is system-level config outside the repo (`/etc/hosts`, DNS records, certificate files). The Executor pattern assumes "write to worktree, commit, review" — not applicable here.
+- **One-time.** Amortize the cost across the entire project, not per-W-item.
+
+Same reasoning as 🔍 spikes: research-flavored work with no diff, run by Orchestrator directly. The first-time dev-environment setup is documented in the project's first ADR(s) so it's not lost.
+
+## After bootstrap: routine dev-branch operation
+
+Once set up, dev is just another branch in the flow. The Orchestrator's STEP 4 merges feature branches to `dev`. Phase exit QAs against `{{sub}}.dev.{{website}}.com`. Promotion to main happens when the user authorizes at the phase boundary.
+
+The user doesn't interact with dev-environment details again unless:
+- A new subdomain is needed (spawns a mini-bootstrap).
+- The local redirect breaks (usually `/etc/hosts` edit was lost, or DNS changed).
+- The remote dev server goes down (different kind of problem — probably escalate to the user).
+
+## Relationship to production
+
+Dev and prod are separate CI workflows and separate URLs:
+
+- Dev: `{{sub}}.dev.{{website}}.com` (local or remote)
+- Prod: `{{sub}}.{{website}}.com` (the live URL from CLAUDE.md — no `dev` subdomain)
+
+The "CI-only deploys" rule from CLAUDE.md applies to prod. Dev is whatever the mode says — local means "run it yourself," remote means "CI deploys on dev push." Both are allowed; neither counts as a prod deploy.

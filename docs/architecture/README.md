@@ -1,0 +1,60 @@
+# Architecture
+
+System design docs. Owned by the Strategist. Referenced by the Orchestrator when briefing Executors on constrained surfaces.
+
+## What goes here
+
+- **ADRs (Architecture Decision Records).** The *rationale* behind locked decisions — why this database, why this auth model, why this boundary. Short one-line summaries of the decisions themselves stay inline in `CLAUDE.md` for every-session visibility; the long-form reasoning lives here.
+- **System diagrams.** Components, data flows, deployment topology. Mermaid in markdown preferred — renders in GitHub and stays diffable.
+- **Data model.** Schema docs, table relationships, invariants. Not the migration files (those live with the code) — the *conceptual* model.
+- **API surface.** Externally-visible contracts: route table, auth model, rate limits, SLA claims.
+- **Integration maps.** Third-party services, MCP servers in use (see `../dev_framework/approved-mcps.md`), external data sources.
+- **Non-negotiables.** Security boundaries, compliance constraints, scaling assumptions.
+
+## What does NOT go here
+
+- **Work plans.** Phase plans and W-items live in `docs/execution-plans/`.
+- **Process / SOP.** How agents operate lives in `docs/dev_framework/`.
+- **Code-level conventions.** TDD, hardcoded-value rules, fail-loudly — `docs/dev_framework/coding-standards.md`.
+- **Issues / bugs / feature requests.** Those belong in `issues/` or a tracker.
+- **Planning / roadmap.** Strategic planning docs (roadmap, future-directions) are a separate surface — see the Strategist's reading list.
+
+## Naming convention
+
+- ADRs: `adr-NNN-<slug>.md` (numbered, padded to 3 digits). Example: `adr-001-postgres-over-mysql.md`.
+- Diagrams / models / maps: free-form descriptive name. Example: `system-overview.md`, `data-model.md`, `api-surface.md`.
+
+## ADR template
+
+```markdown
+# ADR-NNN: <decision name>
+
+**Status:** proposed | accepted | superseded by ADR-MMM | deprecated
+**Date:** YYYY-MM-DD
+**Deciders:** <who>
+
+## Context
+<what forced the decision — constraint, incident, growing pain>
+
+## Decision
+<what we chose, in one or two sentences>
+
+## Consequences
+<what this buys us, what it costs us, what it makes harder>
+
+## Alternatives considered
+<what we didn't pick and why, briefly>
+```
+
+Lock the decision by adding a one-line summary under `## Locked-in decisions` in `CLAUDE.md` with a link back to the ADR.
+
+## Who reads this
+
+- **Strategist:** reads the full tree. ADRs + diagrams are primary material for architectural judgment.
+- **Orchestrator:** reads targeted docs when briefing an Executor on a constrained surface (e.g. auth, billing, data migration). Does NOT load the whole tree.
+- **Executor:** reads only the ADR(s) named in their brief, if any. Most W-items don't need architecture context.
+- **Reviewer:** reads an ADR when the Executor claims the work follows it, to verify alignment. Cites ADR numbers in concerns.
+
+## Staleness rule
+
+Architecture docs that no longer match the code are worse than missing docs — they produce confident wrong answers. The Strategist's phase-boundary alignment audit checks every ADR and diagram against current code state (via GitNexus queries or Code Consultant spawns). Stale docs get either updated or marked `superseded` / `deprecated` — never silently wrong.

@@ -1,0 +1,8 @@
+node_modules/
+.env
+.env.local
+references/
+mockups/node_modules/
+mockups/dist/
+.DS_Store
+.claude/settings.local.json
