@@ -60,16 +60,22 @@ promotion).
   dependent action is always: "the plan update is a real commit on
   dev, verified by git log -1."
 
-  MULTI-WRITER NOTE (ADR-017): The Orchestrator is no longer the only
-  Status writer. The Integrator-QA writes `in_progress → held` atomically
-  with filing an IC-NNN claim (touches plan.md AND claims.md in one
-  commit). The Strategist writes `held → in_progress` (approve/modify)
-  and `held → blocked` (reject) atomically with claim disposition.
-  PLAN-WRITE DISCIPLINE applies at all three write sites; each agent's
-  brief / role doc inlines it. Your job: do NOT flip Status for items
-  the Integrator-QA already flipped to `held` (STEP 3B.5 partial), and
-  do NOT touch claims.md yourself — that's the Integrator's and
-  Strategist's surface.
+  MULTI-WRITER NOTE (ADR-017 + ADR-018): The Orchestrator is no longer
+  the only Status writer. The Integrator-QA writes `in_progress → held`
+  atomically with filing an IC-NNN claim (touches plan.md AND claims.md
+  in one commit). The Strategist writes `held → in_progress`
+  (approve/modify) and `held → blocked` (reject) atomically with claim
+  disposition. The Developer (ADR-018, Developer-mode phases only) writes
+  the full Developer-mode lifecycle including `in_progress → code_review`
+  and `code_review → done`. PLAN-WRITE DISCIPLINE applies at all four
+  write sites; each agent's brief / role doc inlines it. Your job: do
+  NOT flip Status for items the Integrator-QA already flipped to `held`
+  (STEP 3B.5 partial), do NOT touch claims.md yourself (that's the
+  Integrator's and Strategist's surface), and do NOT dispatch into a
+  Developer-mode phase — mode-exclusivity per phase means you only run
+  Orchestrator-mode plans. If you encounter `code_review` Status on the
+  index, surface to the user before doing anything: it indicates
+  Developer-mode work, which you do not own.
 
 STEP 0 — Detect plan format, then reconcile the status ledger.
 

@@ -6,15 +6,19 @@ Linked from `CLAUDE.md`; every session reads CLAUDE.md at start, then loads what
 
 ## What this is
 
-A multi-instance model where three **product-side** persistent Claude Code sessions coordinate via git (PRs and branches), each with a narrow context budget:
+A multi-instance model where four **product-side** persistent Claude Code sessions coordinate via git (PRs and branches), each with a narrow context budget:
 
 - **Strategist** — the architect. Owns planning docs. Doesn't read code.
 - **Designer** — owns UI mockups. Writes only to `mockups/`.
 - **Orchestrator** — dispatches implementation work and coordinates peer review gates. Doesn't write code (except emergency bypass — see [`session-policy.md`](session-policy.md) §"When to suspend this policy").
+- **Developer** — user-invoked persistent session for hands-on coding work with rewind ritual + blind self-review ([ADR-018](../architecture/adr-018-developer-role.md)). Parallel mode to Orchestrator dispatch; mode-exclusive per phase.
 
-Work gets done via **peer dispatch**: the Orchestrator spawns an **Executor** (who writes + commits), then spawns a **Reviewer** and, when required, a **QA** as peer subagents of the Executor. The Orchestrator owns the retry loop — on a Reviewer `block` or QA `fail`, it dispatches a fresh Executor with the concerns as sharpened context. See [`session-policy.md`](session-policy.md) §"Dispatch flow" and [ADR-013](../architecture/adr-013-peer-dispatch.md) for the full model and rationale.
+Work gets done via two parallel modes — **a phase runs end-to-end under one mode**:
 
-A fourth role, **Template Developer**, maintains the canonical `claude_template` repo itself (the framework docs, hooks, ADRs, and managed CLAUDE.md block that every adopter inherits via destructive sync). It is only meaningful when operating in the template repo; in adopter repos the role is inert and framework changes are made by opening a PR against the template. Template Developer sits outside the product-side stack — it does not dispatch Executors, does not produce product artifacts, and does not interact with the three product-side roles during a session. See [`template-developer.md`](template-developer.md) and [ADR-015](../architecture/adr-015-template-developer-role.md).
+- **Orchestrator dispatch** (default, autonomous): the Orchestrator spawns an **Executor** (who writes + commits), then spawns a **Reviewer** and, when required, a **QA** as peer subagents of the Executor. The Orchestrator owns the retry loop — on a Reviewer `block` or QA `fail`, it dispatches a fresh Executor with the concerns as sharpened context. See [`session-policy.md`](session-policy.md) §"Dispatch flow" and [ADR-013](../architecture/adr-013-peer-dispatch.md) for the full model and rationale.
+- **Developer mode** (hands-on, user-in-loop): the user invokes the Developer directly. Developer codes one W-item at a time conversationally, runs a user-mediated QA loop inside `in_progress` (no separate `qa` state), produces a structured rewind summary when the user confirms the feature works, and post-rewind performs blind self-review on its own work using clean context. See [`developer.md`](developer.md) and [ADR-018](../architecture/adr-018-developer-role.md).
+
+A fifth role, **Template Developer**, maintains the canonical `claude_template` repo itself (the framework docs, hooks, ADRs, and managed CLAUDE.md block that every adopter inherits via destructive sync). It is only meaningful when operating in the template repo; in adopter repos the role is inert and framework changes are made by opening a PR against the template. Template Developer sits outside the product-side stack — it does not dispatch Executors, does not produce product artifacts, and does not interact with the four product-side roles during a session. See [`template-developer.md`](template-developer.md) and [ADR-015](../architecture/adr-015-template-developer-role.md).
 
 ## The agent stack
 
@@ -49,7 +53,9 @@ User ↔ Orchestrator        (dispatcher + review coordinator + merger)
 
 Every subagent is a peer under the Orchestrator — no subagent spawns another subagent (hard constraint of the Claude Agent SDK; see [ADR-013](../architecture/adr-013-peer-dispatch.md)). The Orchestrator never opens diffs or source files; it reads Reviewer, QA, and Integrator-QA verdicts (which cite `file:line`). Main only moves at phase-exit promotion.
 
-The stack above shows sequential (per-task) dispatch. For W-items marked `Parallel-safe: true` on the plan, the Orchestrator uses **batch mode** ([ADR-016](../architecture/adr-016-batch-mode-integrator-qa.md)): up to ~3 Executors dispatched concurrently, followed by a single **Integrator-QA** (Opus 1M) call that absorbs per-task Reviewer + pre-merge QA for the batch, writes fix commits within acceptance, files integration claims for scope changes (routed through Strategist + user), and merges the clean items to dev. Sequential mode and batch mode coexist — the choice is per-item at dispatch time, based on the `Parallel-safe` field.
+The stack above shows sequential (per-task) Orchestrator dispatch. For W-items marked `Parallel-safe: true` on the plan, the Orchestrator uses **batch mode** ([ADR-016](../architecture/adr-016-batch-mode-integrator-qa.md)): up to ~3 Executors dispatched concurrently, followed by a single **Integrator-QA** (Opus 1M) call that absorbs per-task Reviewer + pre-merge QA for the batch, writes fix commits within acceptance, files integration claims for scope changes (routed through Strategist + user), and merges the clean items to dev. Sequential mode and batch mode coexist within Orchestrator dispatch — the choice is per-item at dispatch time, based on the `Parallel-safe` field.
+
+**Developer mode** ([ADR-018](../architecture/adr-018-developer-role.md)) is a parallel mode to the Orchestrator dispatch chain shown above. The user invokes the Developer directly; no subagents are dispatched. The Developer codes one W-item at a time, runs a user-mediated QA loop within `in_progress` (no separate `qa` state), produces a structured rewind summary at the user's confirmation that the feature works, and post-rewind performs blind self-review using clean session context — the same persistent owner reviews its own work without the journey of doing it. State machine adds one state, `code_review`, that exists only in Developer-mode lifecycles. Developer mode is **mode-exclusive with Orchestrator dispatch per phase** — a phase runs end-to-end under one mode; switching mid-phase is heavy.
 
 ## Role docs
 
@@ -58,6 +64,7 @@ The stack above shows sequential (per-task) dispatch. For W-items marked `Parall
 | Strategist | [`strategist.md`](strategist.md) | strategist.md + planning docs |
 | Designer | [`designer.md`](designer.md) | designer.md + main app UI components |
 | Orchestrator | [`session-policy.md`](session-policy.md) | session-policy.md + active execution plan |
+| Developer | [`developer.md`](developer.md) | developer.md + coding-standards.md + active plan's plan.md |
 | Template Developer | [`template-developer.md`](template-developer.md) | template-developer.md + dev_framework.md (template repo only; no-op in adopter repos) |
 
 Subagent briefs (load on spawn, not at session start):
@@ -119,4 +126,4 @@ See [`session-policy.md`](session-policy.md) §"When to suspend this policy" —
 
 ## The idea in one paragraph
 
-The three persistent sessions keep their context focused on their own surface — docs (Strategist), UI (Designer), dispatch + review coordination (Orchestrator). Heavy thinking about code happens inside bounded peer subagents — Executors write, Reviewers judge, QA verifies — each spun up fresh per gate call. The Orchestrator's context grows with each W-item but only as much as structured verdicts require (not diff content), keeping it bounded. Failed items surface as short "stumped" packages the user can address in one exchange. Successful items surface as merge commits with the Reviewer's verdict + the Executor's lessons-learned notes, landing in `git log` where the user reads them.
+The four persistent sessions keep their context focused on their own surface — docs (Strategist), UI (Designer), dispatch + review coordination (Orchestrator), hands-on coding (Developer). For Orchestrator-mode phases, heavy thinking about code happens inside bounded peer subagents — Executors write, Reviewers judge, QA verifies — each spun up fresh per gate call; the Orchestrator's context grows with each W-item but only as much as structured verdicts require (not diff content), keeping it bounded. For Developer-mode phases (ADR-018), the Developer codes directly, the user mediates QA in the loop, and the rewind ritual + blind self-review covers code review without spawning a separate process. Either way, failed items surface as short "stumped" packages the user can address in one exchange, and successful items surface as merge commits — Orchestrator-mode commits carry the Reviewer's verdict + Executor's lessons; Developer-mode commits carry the Implementation log on the W-item file. Both land in `git log` where the user reads them.

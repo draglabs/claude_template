@@ -176,20 +176,30 @@ Integration claims (IC-NNN) live in `claims.md` inside the plan folder under the
 
 ## Status ledger (non-negotiable)
 
-Status writes on the active execution plan are **atomic with the git events that trigger them**. Under [ADR-017](../architecture/adr-017-plan-folder-restructure.md) the writer is one of three agents — each owns a distinct subset of transitions:
+Status writes on the active execution plan are **atomic with the git events that trigger them**. Under [ADR-017](../architecture/adr-017-plan-folder-restructure.md) and [ADR-018](../architecture/adr-018-developer-role.md), four agents share the writer authority — each owns a distinct subset of transitions:
 
-- **Orchestrator** — owns most transitions:
+- **Orchestrator** (Orchestrator-mode phases) — owns most transitions:
   - `pending → in_progress` on Executor dispatch (commit the plan update **before** spawning the Executor; no "update later").
   - `in_progress → done` alongside the merge commit.
   - `in_progress → blocked` on Executor stumped or Integrator-QA integration failure.
   - `blocked → in_progress` on re-dispatch with sharpened brief.
   - `done → shipped` in the same commit as the `dev → main` promotion merge.
-- **Integrator-QA** — owns `in_progress → held`. Atomic with filing an IC-NNN claim: one commit writes both `claims.md` (new entry under "## Open") and the index `plan.md` (Status flip on every named W-item). Under the pre-ADR-017 single-file layout the same commit edits the inline claims section and the per-W-item Status fields.
+- **Integrator-QA** — owns `in_progress → held` (Orchestrator batch mode). Atomic with filing an IC-NNN claim: one commit writes both `claims.md` (new entry under "## Open") and the index `plan.md` (Status flip on every named W-item). Under the pre-ADR-017 single-file layout the same commit edits the inline claims section and the per-W-item Status fields.
 - **Strategist** — owns `held → in_progress` (claim approve / modify) and `held → blocked` (claim reject). Atomic with claim disposition: one commit moves the IC-NNN entry from "## Open" to "## Resolved" on `claims.md` AND flips the named W-items' Status on the index. If the disposition revises acceptance, the W-item file edit is part of the same commit.
+- **Developer** (Developer-mode phases) — owns Developer-mode lifecycle transitions ([ADR-018](../architecture/adr-018-developer-role.md)):
+  - `pending → in_progress` on item claim (atomic with branch creation + the user-anchor message).
+  - `in_progress → code_review` when the user confirms the feature works (atomic with the rewind-summary commit on the W-item branch).
+  - `code_review → done` on blind self-review pass (atomic with the merge to `dev` + Implementation log written on the W-item file).
+  - `code_review → in_progress` on a self-review block, user-mediated re-engagement (NOT auto-loop).
+  - `in_progress → blocked` when an issue is unblockable.
+  - `in_progress → held` when filing a claim mid-work (rare path; same shape as Integrator-QA's claim filing).
+  - `done → shipped` when the phase is Developer-driven, in the same commit as the `dev → main` promotion merge.
 
-A retry dispatch (`blocked → in_progress` re-dispatch on the same W-item) does NOT increment any counter on the plan — the W-item simply moves through Status. Retry count is Orchestrator-internal.
+A retry dispatch (`blocked → in_progress` or `code_review → in_progress`) does NOT increment any counter on the plan — the W-item simply moves through Status. Retry counts are role-internal (Orchestrator's tier-based caps, Developer's user-mediated re-engagement).
 
-PLAN-WRITE DISCIPLINE — the read-fresh / Edit / single-commit / verify-pushed sequence — applies at all three write sites, not just the Orchestrator's. The Orchestrator's discipline lives in [`templates/orchestrator-bootstrap.md`](templates/orchestrator-bootstrap.md) (top of file). The Integrator-QA's lives in [`templates/integrator-qa-brief.md`](templates/integrator-qa-brief.md) §STEP 3. The Strategist's lives in [`strategist.md`](strategist.md) §"Plan-write discipline (claim disposition)."
+**Mode-exclusivity per phase (ADR-018).** Orchestrator and Developer modes both write Status. Per-phase mode-exclusivity prevents semantic collision on `in_progress` (Orch's `pending → in_progress → done` vs. Dev's `pending → in_progress → code_review → done`). The user picks the mode at plan draft.
+
+PLAN-WRITE DISCIPLINE — the read-fresh / Edit / single-commit / verify-pushed sequence — applies at all four write sites. The Orchestrator's discipline lives in [`templates/orchestrator-bootstrap.md`](templates/orchestrator-bootstrap.md) (top of file). The Integrator-QA's lives in [`templates/integrator-qa-brief.md`](templates/integrator-qa-brief.md) §STEP 3. The Strategist's lives in [`strategist.md`](strategist.md) §"Plan-write discipline (claim disposition)." The Developer's lives in [`developer.md`](developer.md) §"Plan-write discipline (Developer)."
 
 Full state machine + transition rules + transition table are in [`../execution-plans/README.md`](../execution-plans/README.md) §"Status state machine."
 

@@ -177,9 +177,30 @@ Each W-item file has at most 200 lines and three sections:
 ## Contingencies
 
 Pre-planned fallbacks, known edge cases, "if X happens, do Y" guidance. Optional — write `(none)` when nothing applies.
+
+## Implementation log
+
+Appended by the Developer at `code_review → done` (Developer mode only in v1; ADR-018). Absent until that flip — the section header does not appear on a W-item file at draft.
+
+**Approach:** One paragraph on how the work was actually done.
+
+**Key decisions:**
+- Decision 1 — why
+- Decision 2 — why
+
+**Pivots:**
+- What was tried first, why it didn't work, what replaced it (or `none`).
+
+**Surprises:**
+- Anything the work uncovered that future readers should know (or `none`).
+
+**Followups / loose ends:**
+- Anything intentionally deferred (or `none`).
 ```
 
 **No Status field on the W-item file.** Status lives only on the index. The W-item file is the static SOW; the index is the runtime ledger. This is the single-source rule introduced by ADR-017 — there is no second place for Status to drift to.
+
+The Implementation log is the one section that gets appended after draft, at the `code_review → done` flip. It is append-only (not mutated after merge) and therefore does not reintroduce drift bait — see ADR-018.
 
 ### W-item file fields
 
@@ -193,6 +214,7 @@ Pre-planned fallbacks, known edge cases, "if X happens, do Y" guidance. Optional
 | **Touches** | Execution notes | Files the item will modify. Executor uses this as scope boundary. |
 | **References** | Execution notes | Optional read-only orientation files with line ranges (e.g. `src/legacy/foo.py:120-280`). Intended for port / migration / refactor work where pre-existing structure must be understood. Modifying one is scope creep. |
 | **Contingencies** | Contingencies | Pre-planned fallbacks and edge cases. Strategist-authored at draft time. |
+| **Implementation log** | Implementation log (post-completion) | Appended by the Developer at `code_review → done` flip. Captures approach, key decisions, pivots, surprises, followups. Compensates for chat-rewind discarding session journey. Developer mode only in v1 (ADR-018). |
 
 ## Parallel-safe field
 
@@ -214,7 +236,16 @@ The framework does NOT auto-derive `Parallel-safe` from `Touches`. The Strategis
 
 ## Status state machine
 
-Six states: `pending`, `in_progress`, `held`, `blocked`, `done`, `shipped`.
+Seven states: `pending`, `in_progress`, `code_review`, `held`, `blocked`, `done`, `shipped`.
+
+The state machine has two mode-specific lifecycles. Orchestrator mode (ADR-013 sequential, ADR-016 batch) and Developer mode (ADR-018) share `pending`, `held`, `blocked`, `done`, `shipped` and the `held`/`blocked` recovery transitions. The middle of the lifecycle differs:
+
+- **Orchestrator mode** runs `in_progress → done` — Reviewer + QA gates run as peer subagents.
+- **Developer mode** runs `in_progress → code_review → done` — user mediates QA inside `in_progress` (no separate `qa` state); rewind ritual + blind self-review covers the `code_review` step.
+
+A given W-item runs through one mode's lifecycle at a time, by per-phase mode-exclusivity (see §"Mode-exclusivity" below).
+
+### Orchestrator-mode lifecycle
 
 ```
       ┌─────────┐
@@ -249,38 +280,107 @@ Six states: `pending`, `in_progress`, `held`, `blocked`, `done`, `shipped`.
    └─────────┘
 ```
 
+### Developer-mode lifecycle
+
+```
+   pending ──▶ in_progress ──▶ code_review ──▶ done ──▶ shipped
+                  │     ▲          │    ▲                  ▲
+                  │     │          │    │                  │
+                  │     │          │    │ self-review      │ phase exit
+                  │     │          │    │ block, user      │ + user authorize
+                  │     │          │    │ re-engages       │ + Developer promotes
+                  │     │          │    │
+                  │     │          │    └────── (manual; not auto-loop)
+                  │     │          │
+                  │     │          │ blind self-review pass
+                  │     │          │ + merge to dev
+                  │     │          │ + Implementation log on W-item file
+                  │     │          ▼
+                  │     │       (continue to done)
+                  │     │
+                  │     │ user confirms feature works
+                  │     │ → flip happens here, atomic with rewind summary commit
+                  │     │
+                  │     └──── user mediates QA loop inside in_progress
+                  │            (Developer codes, user tests, iterate)
+                  │
+                  ├─▶ held (Developer files claim; rare; Strategist disposes
+                  │         as in Orchestrator mode)
+                  │
+                  └─▶ blocked (unblockable; user can't move it forward)
+```
+
+Anchor moment: the Developer asks the user "ready to start coding W-X?" before the `pending → in_progress` flip. The user notes this as the chat-rewind anchor — at the `in_progress → code_review` flip, the Developer recommends rewinding chat to this point and pasting the rewind summary, putting the Developer's session into clean context for the blind self-review.
+
+### Mode-exclusivity (per phase)
+
+Orchestrator mode and Developer mode both write Status to `plan.md`. PLAN-WRITE DISCIPLINE protects against file races, but not against semantic ambiguity if both modes touch the same W-item — Orchestrator's `pending → in_progress → done` and Developer's `pending → in_progress → code_review → done` interpret `in_progress` differently.
+
+Resolution: **one mode per phase, picked at draft time.** A phase runs end-to-end under either Orchestrator dispatch or Developer mode; do not mix on the same plan. Switching modes mid-phase is heavy — close the phase (`done → shipped`) and start a fresh one under the other mode.
+
+A per-W-item `Mode` field is a possible future extension if usage shows mid-phase mixing is needed. Not in v1 (ADR-018).
+
 ### Transition table
 
 PLAN-WRITE DISCIPLINE applies to every transition: the writing agent reads the index file fresh, edits it, commits the edit alongside the trigger event (atomically — one commit, all touched files together), and verifies the push. Each writer's role doc / brief inlines the discipline at its write site.
 
-| From → To | Trigger | Writer | Atomic with |
-|---|---|---|---|
-| `pending` → `in_progress` | Orchestrator about to spawn Executor | Orchestrator | Dispatch event (Status flip + Branch populate; commit before spawning) |
-| `in_progress` → `done` | Executor pass + Orchestrator merges feature → `dev` | Orchestrator | The merge commit |
-| `in_progress` → `blocked` | Executor stumped, or Integrator-QA integration failure (confidence <80%) | Orchestrator | Stumped notice (Status flip + index Notes line) |
-| `in_progress` → `held` | Integrator-QA files an Integration claim naming the W-item | Integrator-QA | Claim filing — one commit writes both `claims.md` (new IC-NNN under Open) and `plan.md` (Status flip) |
-| `held` → `in_progress` | Strategist disposes claim as `approve` or `modify` | Strategist | Disposition commit — one commit writes both `claims.md` (move to Resolved) and `plan.md` (Status flip) |
-| `held` → `blocked` | Strategist disposes claim as `reject` and the rejection leaves the W-item un-actionable | Strategist | Same as above |
-| `blocked` → `in_progress` | Orchestrator re-dispatches with a sharpened brief | Orchestrator | Re-dispatch (Status flip + updated Branch if changed) |
-| `done` → `shipped` | Phase-exit QA passes + user authorizes + Orchestrator merges `dev` → `main` | Orchestrator | The promotion merge |
+| From → To | Mode | Trigger | Writer | Atomic with |
+|---|---|---|---|---|
+| `pending` → `in_progress` | Orch | Orchestrator about to spawn Executor | Orchestrator | Dispatch event (Status flip + Branch populate; commit before spawning) |
+| `pending` → `in_progress` | Dev | Developer claims item after user confirms "ready to start coding" | Developer | Branch creation + anchor message; one plan-write commit |
+| `in_progress` → `done` | Orch | Executor pass + Orchestrator merges feature → `dev` | Orchestrator | The merge commit |
+| `in_progress` → `code_review` | Dev | User confirms feature works; Developer drafts rewind summary | Developer | Rewind summary commit on the W-item branch |
+| `code_review` → `done` | Dev | Developer's blind self-review passes; merge to `dev` | Developer | Merge commit + Implementation log on W-item file |
+| `code_review` → `in_progress` | Dev | Self-review surfaces a serious finding; user re-engages | Developer | Re-dispatch (user-mediated, NOT auto-loop) |
+| `in_progress` → `blocked` | Orch | Executor stumped, or Integrator-QA integration failure (confidence <80%) | Orchestrator | Stumped notice (Status flip + index Notes line) |
+| `in_progress` → `blocked` | Dev | Unblockable issue; user can't move work forward | Developer | Stumped notice (Status flip + index Notes line) |
+| `in_progress` → `held` | Orch (batch) | Integrator-QA files a claim naming the W-item | Integrator-QA | Claim filing — one commit writes `claims.md` (IC-NNN under Open) + `plan.md` (Status flip) |
+| `in_progress` → `held` | Dev | Developer files a claim mid-work (rare; ≥80% confidence acceptance ambiguity) | Developer | Claim filing — same shape as Integrator-QA |
+| `held` → `in_progress` | Both | Strategist disposes claim `approve` / `modify` | Strategist | Disposition — one commit moves IC-NNN to Resolved + flips Status |
+| `held` → `blocked` | Both | Strategist disposes claim `reject` and W-item is un-actionable | Strategist | Same as above |
+| `blocked` → `in_progress` | Orch | Orchestrator re-dispatches with a sharpened brief | Orchestrator | Re-dispatch (Status flip + updated Branch if changed) |
+| `done` → `shipped` | Both | Phase-exit QA passes + user authorizes + active mode promotes `dev → main` | Orchestrator (Orch-driven phase) or Developer (Dev-driven phase) | The promotion merge |
 
-The plan is a ledger — stale entries mean the ledger is lying and a future session will dispatch duplicate work or skip done work. PLAN-WRITE DISCIPLINE is the mechanism that keeps the ledger and git in lockstep across all three writing agents.
+The plan is a ledger — stale entries mean the ledger is lying and a future session will dispatch duplicate work or skip done work. PLAN-WRITE DISCIPLINE is the mechanism that keeps the ledger and git in lockstep across all four writing agents.
 
 ### `held` semantics
 
-A W-item enters `held` when an open Integration claim names it. Held items have a branch that exists; the branch is preserved during the hold (no Executor activity). Held items do NOT merge to `dev` until the claim is disposed. Other W-items in the same batch that aren't named by the claim continue to merge normally.
+A W-item enters `held` when an open Integration claim names it. Filer depends on mode:
 
-The `held` state replaces the convention (used in earlier ADR-016 drafts) of leaving claim-blocked items at `in_progress` with a Notes line — that approach left the Status field misleading. Under ADR-017 the Status field reflects actual state.
+- **Orchestrator (batch) mode:** Integrator-QA files when an integration fix would step outside acceptance (ADR-016).
+- **Developer mode:** the Developer files mid-work when it identifies acceptance ambiguity at ≥80% confidence (ADR-018, rare path; most ambiguity resolves with the user in real-time).
+
+In both cases: held items have a branch that exists, the branch is preserved during the hold (no Executor or Developer activity), held items do NOT merge to `dev` until the claim is disposed. Strategist disposes per the standard claim flow (`held → in_progress / blocked`).
+
+The `held` state replaces the convention (used in earlier ADR-016 drafts) of leaving claim-blocked items at `in_progress` with a Notes line — that approach left the Status field misleading.
+
+### `code_review` semantics
+
+A W-item enters `code_review` only in Developer mode, when the user has confirmed the feature works and the Developer is preparing the rewind hand-off. The branch carries the implementation; the rewind summary has been committed; the Developer has recommended the user rewind chat and paste the summary. Post-rewind, the Developer reads `plan.md`, sees the item at `code_review`, and performs blind self-review.
+
+Two outcomes:
+
+- **Pass.** Merge to `dev`, write Implementation log on the W-item file, flip `code_review → done` in one commit.
+- **Block.** Surface findings to user. Path back to `in_progress` is user-mediated — the Developer does not auto-loop. The user chooses: fix-and-retry (`code_review → in_progress`), ship-with-known-limitation (recorded as a user override in the Implementation log + plan Notes; flip to `done`), or escalate.
 
 ### Reconciliation (on session start)
 
-A fresh Orchestrator session MUST reconcile the plan ledger against git reality before dispatching anything. See `orchestrator-bootstrap.md` STEP 0. New check under ADR-017: every `held` W-item must have a corresponding open IC-NNN entry in `claims.md`. A `held` item with no open claim is a ledger lie — surface to the user, do not auto-fix.
+A fresh Orchestrator session MUST reconcile the plan ledger against git reality before dispatching anything. See `orchestrator-bootstrap.md` STEP 0. Check under ADR-017: every `held` W-item must have a corresponding open IC-NNN entry in `claims.md`. A `held` item with no open claim is a ledger lie — surface to the user, do not auto-fix.
+
+A fresh Developer session reconciles similarly per its bootstrap (`developer.md`). The state IS the memory:
+
+- Item at `code_review` → post-rewind blind-self-review path; propose to do that before any new work.
+- Item at `in_progress` after a context reset → ambiguous (mid-coding before rewind, or mid-QA-loop). Confirm with user.
+- Item at `held` → awaiting Strategist disposition; skip.
+- Otherwise → propose top `pending` item by critical path (Depends-on graph).
 
 Summary-table-vs-W-item-section drift is structurally impossible under the folder layout (Status appears once on the index). The pre-ADR-017 STEP 0 check for that drift retires.
 
 ## Integration claims
 
-**Filed by the Integrator-QA in batch mode (ADR-016) when a fix would require stepping outside a W-item's acceptance criteria.** The Integrator does NOT change scope unilaterally. When its confidence in a proposed scope change is ≥80%, it files an integration claim in `claims.md` and flips the named W-item(s) to `held`. The Strategist triages with the user. When confidence is <80%, the Integrator surfaces to the user immediately as a feature integration failure — no claim is filed; the W-item moves to `blocked` instead.
+**Filed by the Integrator-QA in batch mode (ADR-016), or by the Developer in Developer mode (ADR-018), when a fix would require stepping outside a W-item's acceptance criteria.** The filer does NOT change scope unilaterally. When confidence in a proposed scope change is ≥80%, the filer adds an integration claim to `claims.md` and flips the named W-item(s) to `held`. The Strategist triages with the user. When confidence is <80%, the filer surfaces to the user immediately as a feature failure — no claim is filed; the W-item moves to `blocked` instead.
+
+In Developer mode the rare-path filing is described in [`developer.md`](../dev_framework/developer.md) §"Claim-filing (rare path)" — most acceptance ambiguity in Developer mode resolves with the user in real-time, but a claim is appropriate when the change has cross-W-item implications or the user isn't immediately available to confirm.
 
 ### Where claims live
 
@@ -295,7 +395,7 @@ Integration claims live in `claims.md` inside the plan folder. Two sections — 
 
 ### IC-NNN — YYYY-MM-DD — {{W-id(s)}} — {{short title}}
 
-**Filed by:** Integrator-QA, batch <ids>
+**Filed by:** Integrator-QA (batch <ids>) | Developer (Dev-mode session, ADR-018)
 **Confidence:** <pct>
 **Proposed scope change:** <what Integrator wants to do but won't do unilaterally>
 **Why:** <what forced the proposal — test failing for X, acceptance ambiguous on Y>
