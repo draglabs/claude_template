@@ -172,20 +172,26 @@ There is no "re-run the Integrator-QA" loop the way sequential mode runs Reviewe
 
 ### Claim resolution
 
-Integration claims (IC-NNN) live inline on the active execution plan — see `execution-plans/README.md §"Integration claims"`. The Strategist triages alongside `process-exceptions.md` at phase boundaries and on demand. Dispositions (`approve` / `reject` / `modify`) are recorded with the claim; on `approve` or `modify`, the Orchestrator re-dispatches the affected items (either as a small batch or sequentially, depending on updated `Parallel-safe` status). The Orchestrator's cadence is "continue forward progress on unblocked items; revisit claim-blocked items after Strategist disposition."
+Integration claims (IC-NNN) live in `claims.md` inside the plan folder under the ADR-017 layout, or inline on the single-file plan under the pre-ADR-017 layout — see `execution-plans/README.md §"Integration claims"`. Filing a claim is the Integrator-QA's `in_progress → held` write (atomic with the IC-NNN entry). The Strategist triages alongside `process-exceptions.md` at phase boundaries and on demand. Dispositions (`approve` / `reject` / `modify`) are recorded with the claim and flip the named W-items' Status atomically: `held → in_progress` on approve/modify, `held → blocked` on reject. After the Strategist's disposition the Orchestrator re-dispatches affected items at its next eligibility check (either as a small batch or sequentially, depending on updated `Parallel-safe` status). The Orchestrator's cadence is "continue forward progress on unblocked items; revisit held items after Strategist disposition."
 
 ## Status ledger (non-negotiable)
 
-The Orchestrator owns the status of every W-item on the active execution plan. Status updates are **atomic with the git events that trigger them**:
+Status writes on the active execution plan are **atomic with the git events that trigger them**. Under [ADR-017](../architecture/adr-017-plan-folder-restructure.md) the writer is one of three agents — each owns a distinct subset of transitions:
 
-- Dispatch first Executor on a W-item → flip `pending` → `in_progress`, populate Branch. Commit the plan update **before** spawning the Executor. No "update later."
-- All gates passed → flip `in_progress` → `done` alongside the merge commit.
-- Retry cap exhausted → flip `in_progress` → `blocked` with a Notes line naming the unresolved concern. Commit.
-- Phase-exit promotion → flip every promoted W-item from `done` → `shipped` in the same commit as the `dev` → `main` merge.
+- **Orchestrator** — owns most transitions:
+  - `pending → in_progress` on Executor dispatch (commit the plan update **before** spawning the Executor; no "update later").
+  - `in_progress → done` alongside the merge commit.
+  - `in_progress → blocked` on Executor stumped or Integrator-QA integration failure.
+  - `blocked → in_progress` on re-dispatch with sharpened brief.
+  - `done → shipped` in the same commit as the `dev → main` promotion merge.
+- **Integrator-QA** — owns `in_progress → held`. Atomic with filing an IC-NNN claim: one commit writes both `claims.md` (new entry under "## Open") and the index `plan.md` (Status flip on every named W-item). Under the pre-ADR-017 single-file layout the same commit edits the inline claims section and the per-W-item Status fields.
+- **Strategist** — owns `held → in_progress` (claim approve / modify) and `held → blocked` (claim reject). Atomic with claim disposition: one commit moves the IC-NNN entry from "## Open" to "## Resolved" on `claims.md` AND flips the named W-items' Status on the index. If the disposition revises acceptance, the W-item file edit is part of the same commit.
 
-A retry dispatch does NOT transition Status — the W-item stays `in_progress` across retries. Retry count is Orchestrator-internal.
+A retry dispatch (`blocked → in_progress` re-dispatch on the same W-item) does NOT increment any counter on the plan — the W-item simply moves through Status. Retry count is Orchestrator-internal.
 
-Full state machine + transition rules are in [`../execution-plans/README.md`](../execution-plans/README.md) §"Status state machine."
+PLAN-WRITE DISCIPLINE — the read-fresh / Edit / single-commit / verify-pushed sequence — applies at all three write sites, not just the Orchestrator's. The Orchestrator's discipline lives in [`templates/orchestrator-bootstrap.md`](templates/orchestrator-bootstrap.md) (top of file). The Integrator-QA's lives in [`templates/integrator-qa-brief.md`](templates/integrator-qa-brief.md) §STEP 3. The Strategist's lives in [`strategist.md`](strategist.md) §"Plan-write discipline (claim disposition)."
+
+Full state machine + transition rules + transition table are in [`../execution-plans/README.md`](../execution-plans/README.md) §"Status state machine."
 
 ### Why this matters
 

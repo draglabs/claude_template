@@ -44,7 +44,9 @@ feature branch, not just the latest commit.
 
 ## Canonical references
 
-- docs/execution-plans/<active-plan>.md §{{W-id}}  (acceptance criteria)
+- The W-item SOW (acceptance criteria + Touches + References + Contingencies):
+  - Folder format (ADR-017): docs/execution-plans/<plan>/w-{{id}}.md
+  - Single-file format: docs/execution-plans/<active-plan>.md §{{W-id}}
 - docs/dev_framework/session-policy.md                     (dispatch policy)
 - docs/dev_framework/coding-standards.md                   (enforced practices)
 - docs/framework_exceptions/dev_framework_exceptions.md           (project deviations)

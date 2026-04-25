@@ -27,6 +27,13 @@ same TDD + coding-standards discipline the Executor followed.
 Batch ID: {{batch-id}}
 Target branch: dev
 
+Plan format: {{folder | single-file}} (per ADR-017 / Orchestrator STEP 0
+PRELUDE)
+PLAN_PATH: {{absolute or repo-relative path to the index — plan.md
+under folder format, <plan>.md under single-file format}}
+CLAIMS_PATH: {{path to claims.md under folder format; same as PLAN_PATH
+under single-file format (claims live inline there)}}
+
 W-items in this batch (each with its own worktree + feature branch):
 {{paste per-item list — for each W-item:
   - W-id + short title
@@ -45,10 +52,18 @@ W-items in this batch (each with its own worktree + feature branch):
    is an Integrator-QA bug.
 2. docs/framework_exceptions/dev_framework_exceptions.md — project-level
    deviations that may suspend specific standards for this project.
-3. docs/execution-plans/<active-plan>.md — read the W-item entries for
-   every item in this batch, plus any Integration claims (open) that
-   name these items (prior claims may have constrained the current
-   pass).
+3. The plan ledger:
+   - Folder format: read PLAN_PATH (plan.md — the index) for each
+     W-item's row in the summary table. Read each W-item's SOW file
+     (docs/execution-plans/<plan>/w-<id>.md) for full Acceptance,
+     Touches, References, and Contingencies — those fields no longer
+     live on the index. Read CLAIMS_PATH (claims.md) for any open
+     IC-NNN entries that name items in this batch.
+   - Single-file format: read PLAN_PATH (the single plan file) — it
+     carries summary table, per-W-item sections, and inline Integration
+     claims sections, all in one place.
+   Prior claims may have constrained the current pass; you must read
+   them either way.
 4. CLAUDE.md §"Locked-in decisions" — constraints you must not violate
    when writing fix commits.
 
@@ -163,9 +178,9 @@ You do NOT make the change. You propose it.
 Assess confidence in your proposed resolution (same 80% threshold as
 STEP 1).
 
-**IF confidence ≥ 80% → file a claim.** Append to the active plan's
-`## Integration claims (open)` section (create the section if it
-doesn't exist). Shape:
+**IF confidence ≥ 80% → file a claim.** A claim is a TWO-FILE atomic
+write under ADR-017: the IC-NNN entry on CLAIMS_PATH AND the index
+Status flip on PLAN_PATH ship as ONE commit. Shape of the entry:
 
 ```
 ### IC-NNN — YYYY-MM-DD — {{W-id(s)}} — {{short title}}
@@ -178,15 +193,66 @@ doesn't exist). Shape:
 **Blocks:** <W-item ids whose merge is held pending resolution>
 ```
 
-Assign IC-NNN as the next unused number in the plan. Commit the plan
-edit to dev. In your return shape, list the claim under
-`claims_filed`. The named W-items do NOT merge; other W-items in the
-batch that are not blocked proceed through merge normally.
+Assign IC-NNN as the next unused number in the plan (scan all open and
+resolved entries — numbers persist across move).
 
-**IF confidence < 80% → surface.** Do NOT file a claim. Return
-"integration-failure" to the Orchestrator with a clear description of
-what you found and why you can't propose a high-confidence fix. The
-Orchestrator relays to the user.
+PLAN-WRITE DISCIPLINE (mandatory at this write site — same mechanism
+as the Orchestrator's plan-write sites):
+
+  Status writes by the Integrator-QA must be atomic with the IC-NNN
+  filing. Claude Code's Edit tool fails silently on stale reads — a
+  filesystem-level hash mismatch from any concurrent edit in the main
+  working tree (Orchestrator, Strategist, user) drops your write
+  without an error you can act on. The hazard is the same one the
+  Orchestrator's discipline closes; you're a new write site, so the
+  discipline applies here too.
+
+  Steps, in order:
+    1. Read PLAN_PATH fresh (syncs the Edit tool's hash).
+    2. Read CLAIMS_PATH fresh — under folder format read claims.md;
+       create it if it doesn't exist (first claim filing for the plan).
+       Under single-file format CLAIMS_PATH == PLAN_PATH; the read in
+       step 1 already covered it.
+    3. Edit CLAIMS_PATH: append the IC-NNN entry under the "## Open"
+       section (single-file format: append under
+       "## Integration claims (open)"). Create the section if missing.
+    4. Edit PLAN_PATH: for every W-id named in **Blocks**, flip
+       Status from `in_progress` to `held` on the index summary table.
+       Under single-file format also keep the per-W-item Status field
+       matched.
+    5. Under folder format, if PLAN_PATH does not yet have a
+       "Integration claims" pointer, add one (e.g.,
+       `**Integration claims:** [`claims.md`](claims.md) — open: N,
+       resolved: M`). Update the counts.
+    6. Commit (ONE commit, BOTH file writes):
+         git add PLAN_PATH CLAIMS_PATH    # under folder format
+         # OR (single-file format):
+         git add PLAN_PATH                 # both writes are in one file
+         git commit -m "IC-NNN filed (W-<ids> in_progress → held)"
+         git push origin dev
+    7. Verify all of:
+         a. Both Edits returned success (no stale-read error).
+         b. `git commit` exited zero AND did NOT print "nothing to
+            commit" (silent drop check).
+         c. `git push origin dev` succeeded.
+         d. `git log -1` shows your commit message.
+       If any check fails: the named W-items have NOT been flipped to
+       `held`. Re-Read both files (a concurrent edit may have already
+       captured part of the change), re-apply, or surface the
+       discrepancy in your return shape and do NOT proceed to STEP 4
+       merge for items that should be held but aren't.
+
+In your return shape, list the claim under `claims_filed`. The named
+W-items do NOT merge; other W-items in the batch that are not blocked
+proceed through merge normally.
+
+**IF confidence < 80% → surface.** Do NOT file a claim, do NOT flip any
+W-item to `held`. Return "integration-failure" to the Orchestrator with
+a clear description of what you found and why you can't propose a
+high-confidence fix. The Orchestrator flips the affected items to
+`blocked` (not `held`) and relays to the user. The distinction is
+load-bearing: `held` means a claim is open and the Strategist will
+dispose; `blocked` means no claim and the user is needed.
 
 ## STEP 4 — Merge the clean W-items + return
 

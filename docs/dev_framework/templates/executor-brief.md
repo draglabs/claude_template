@@ -49,7 +49,17 @@ STEP 1 — Orient. Read in this order:
      enforcement starts with you.
   2. docs/framework_exceptions/dev_framework_exceptions.md (in full) — any
      project-level deviations from the standard SOP.
-  3. docs/execution-plans/<active-plan>.md §{{W-id}} (acceptance criteria).
+  3. The W-item SOW. Path depends on plan format (per ADR-017):
+       - Folder format: docs/execution-plans/<plan>/w-{{id}}.md (the
+         W-item file — High level, Execution notes, Contingencies).
+       - Single-file format (pre-ADR-017):
+         docs/execution-plans/<active-plan>.md §{{W-id}} (the per-W-item
+         section inline on the plan).
+     The Orchestrator's brief above already pasted "What", "Acceptance
+     criteria", "Files you will touch", and "References" verbatim from
+     this source — read the source anyway to confirm nothing was lost
+     in translation, especially Contingencies and Depends on which the
+     brief may not echo.
   4. Every file listed in "Files you will touch" below — in full, even if
      you think you'll only modify one small piece.
   5. Every file listed in "References" below (if any) — read the specified

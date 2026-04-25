@@ -41,7 +41,7 @@ Executors in batch mode own first-pass quality more aggressively — the Reviewe
 
 ### Integration claim
 
-- **Artifact location:** inline on the active execution plan under a `## Integration claims` section. Open claims live in `## Integration claims (open)`; resolved claims move to `## Integration claims (resolved)` after Strategist+user disposition.
+- **Artifact location:** under ADR-017's folder structure, claims live in `claims.md` inside the plan folder (`docs/execution-plans/<plan>/claims.md`). Under the pre-ADR-017 single-file layout, claims live inline on the active plan file under a `## Integration claims` section. Both layouts use the same shape and triage protocol; only the file location differs. The Orchestrator's STEP 0 PRELUDE format detection (orchestrator-bootstrap.md) resolves the path; the Integrator brief's `CLAIMS_PATH` field carries it.
 - **Shape:**
   ```markdown
   ### IC-NNN — YYYY-MM-DD — {{W-id(s)}} — {{short title}}
@@ -52,6 +52,7 @@ Executors in batch mode own first-pass quality more aggressively — the Reviewe
   **Why:** <what forced the proposal — test failing for X, acceptance ambiguous on Y>
   **Blocks:** <W-item ids whose merge is held pending resolution>
   ```
+- **Status linkage (ADR-017):** under the folder layout, filing a claim atomically flips named W-items to `held` on the index (one commit, both files). Disposition (`approve`/`modify`/`reject`) atomically moves the claim to Resolved AND flips Status (`held → in_progress` for approve/modify; `held → blocked` for reject). The pre-ADR-017 layout keeps named items at `in_progress` with a Notes line; the new `held` state replaces that convention so the Status field stops misleading.
 - **Blocking semantics:** an open claim blocks **only the named W-items** from merging. Other W-items in the batch that aren't named proceed normally. Other batches, sequential work, and the Orchestrator's forward progress are not blocked.
 - **Triage:** the Strategist reviews open claims on a cadence similar to `process-exceptions.md` — at phase boundaries and on demand. Resolution loops in the user. No autonomous resolution by the Strategist — claims exist because the Integrator refused to make a scope decision without authorization.
 

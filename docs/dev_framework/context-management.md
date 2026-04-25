@@ -28,7 +28,7 @@ Each persistent instance reads its role doc at session start. No instance reads 
 
 | Instance | Reads at session start |
 |----------|----------------------|
-| **Orchestrator** | `docs/dev_framework/session-policy.md` + active execution plan |
+| **Orchestrator** | `docs/dev_framework/session-policy.md` + active execution plan index (`plan.md` under ADR-017 folder layout; the single plan file under pre-ADR-017 layout) |
 | **Strategist** | `docs/dev_framework/strategist.md` + planning docs (plan, roadmap, future-directions). Does NOT load `docs/dev_framework/coding-standards.md` or project `src/` — code questions go through a Code Consultant subagent |
 | **Designer** | `docs/dev_framework/designer.md` + existing UI components (read, not load) |
 | **Template Developer** | `docs/dev_framework/template-developer.md` + `docs/dev_framework/dev_framework.md`. Template-repo-only; specific role docs / ADRs / hook scripts load on demand (Layer 2). Does NOT load project `src/` (template has none) or `coding-standards.md` |
@@ -43,6 +43,8 @@ Reference material pulled only when actively needed for a specific task.
 
 - `docs/dev_framework/coding-standards.md` — loaded by Executor, Reviewer, and Integrator-QA subagents at spawn (Step 1 / Step 0 of their briefs)
 - `docs/dev_framework/templates/*` — briefing templates, loaded when spawning a subagent. In particular: `reviewer-brief.md` for sequential-mode per-task review, `integrator-qa-brief.md` for batch-mode end-of-batch integration + review + test + fix (ADR-016), `qa-brief.md` for phase-exit and post-promotion live-environment passes.
+- **W-item SOW files** (ADR-017 folder layout: `docs/execution-plans/<plan>/w-<id>.md`; pre-ADR-017: per-W-item section inline on the plan) — loaded ON DEMAND by the Orchestrator when filling a dispatch brief, by the Executor at STEP 1, by the Reviewer when reading acceptance, and by the Integrator-QA when scanning the batch. Never preloaded at session start; this is the load-bearing part of the folder structure — per-dispatch context is bounded by the W-item, not the phase.
+- `docs/execution-plans/<plan>/claims.md` (folder layout) — loaded by the Orchestrator only during STEP 0 reconciliation of `held` items, and by the Strategist during claim triage. Filed by the Integrator-QA. Other roles do not read it.
 - `docs/framework_exceptions/execution-incidents.md` — loaded when a process violation occurs
 - `docs/archive/*` — closed phases, loaded only for historical reference
 - `references/` — external repos, loaded when cross-referencing
@@ -59,7 +61,7 @@ Target context costs for session-start reading:
 |-------|--------|------------|
 | Layer 0 (CLAUDE.md) | < 100 lines | Strategist reviews any CLAUDE.md edit for bloat |
 | Layer 1 (role doc + standards) | < 200 lines per role | Strategist reviews at phase boundaries |
-| Layer 1 (active execution plan) | < 150 lines | Plans that exceed this should be split |
+| Layer 1 (active execution plan index) | < 150 lines | Plans that exceed this should be split. Under the ADR-017 folder layout this is `plan.md` (the index) only; W-item SOW files (≤200 lines each) load on demand at Layer 2. |
 
 **If the combined Layer 0 + Layer 1 for any role exceeds ~400 lines, something must be archived, condensed, or moved to Layer 2.**
 
@@ -67,10 +69,11 @@ Target context costs for session-start reading:
 
 When a phase or execution plan is complete:
 
-1. Add `## Status: CLOSED` header to the plan.
-2. Move the file to `docs/archive/`.
-3. Remove it from CLAUDE.md's reading order.
-4. The Strategist keeps a one-line summary in `docs/archive/README.md` for historical reference.
+1. Move the plan to `docs/archive/`.
+   - Folder layout (ADR-017): `mv docs/execution-plans/exec-phase-1 docs/archive/` — single move; the folder (`plan.md` + W-item files + `claims.md`) preserves intact.
+   - Single-file layout: add `## Status: CLOSED` header to the plan, then `mv docs/execution-plans/exec-phase-1.md docs/archive/`.
+2. Remove it from CLAUDE.md's reading order if it was the active-plan pointer.
+3. The Strategist keeps a one-line summary in `docs/archive/README.md` for historical reference.
 
 **Closed phases are never in the session-start reading list.** If a session needs historical context, it loads from the archive on demand.
 
@@ -79,8 +82,12 @@ When a phase or execution plan is complete:
 ```
 docs/archive/
   README.md              # one-line summaries of each archived plan
-  exec-phase-1.md        # closed execution plan
-  exec-phase-2.md        # closed execution plan
+  exec-phase-1/          # closed plan, folder layout (ADR-017)
+    plan.md
+    w-a1.md
+    ...
+    claims.md
+  exec-phase-2.md        # closed plan, single-file layout (pre-ADR-017)
   ...
 ```
 

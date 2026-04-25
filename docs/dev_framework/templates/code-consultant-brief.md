@@ -46,7 +46,7 @@ If the answer is not in the starting points, search the tree
 
 After finding the direct answer, check whether the code state
 contradicts:
-- docs/execution-plans/<active-plan>.md (what the plan says should exist)
+- The active execution plan (folder layout: docs/execution-plans/<plan>/plan.md + W-item files; single-file layout: docs/execution-plans/<active-plan>.md) — what the plan says should exist
 - CLAUDE.md §Locked-in decisions (what is supposedly locked)
 - The most recent Strategist-authored planning PR on this surface
 
