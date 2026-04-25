@@ -80,6 +80,8 @@ The first two sections orient any agent or human opening the plan: what is this 
 
 ## Executive summary
 
+**Mode:** orchestrator
+
 **Goal:** Establish multi-tenant auth and per-tenant data isolation as the substrate every later feature depends on.
 
 **Scope:**
@@ -98,6 +100,17 @@ The first two sections orient any agent or human opening the plan: what is this 
 ```
 
 The Strategist writes these at plan-draft time. They are not runtime ledger fields — phase pivots may revise them; routine W-item progress does not.
+
+#### Mode field (mode-exclusivity mechanism)
+
+`Mode` determines which dispatch flow runs the plan. Allowed values:
+
+- **`orchestrator`** — default. ADR-013 sequential or ADR-016 batch dispatch through Executor / Reviewer / QA peer subagents.
+- **`developer`** — ADR-018 hands-on, user-invoked Developer with rewind ritual + blind self-review.
+
+The Strategist sets `Mode` at plan draft. Both the Orchestrator's STEP 0 PRELUDE and the Developer's bootstrap read this field and **refuse to act on a plan that doesn't match their mode** — this is the mechanism behind mode-exclusivity per phase ([ADR-018](../architecture/adr-018-developer-role.md)). Mismatches surface to the user; no auto-resolution.
+
+Pre-ADR-018 plans lack this field; both bootstraps interpret absent `Mode` as `orchestrator` for back-compat. Strategists migrating a phase to Developer mode set the field explicitly at draft.
 
 ### Summary table
 
