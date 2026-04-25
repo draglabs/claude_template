@@ -58,11 +58,46 @@ These bounds keep each artifact readable within a session's context budget. Per-
 
 ## The index (`plan.md`)
 
-The index is the runtime ledger. It carries:
+The index is the runtime ledger. The top of the file orients a reader; the rest tracks state.
+
+**Top of file (plan-level, set at draft, rarely revised):**
+
+- An H1 plan title — a phrase a fresh reader understands without context, not the folder slug.
+- An **Executive summary** section — Goal, Scope, Out of scope, Success criteria.
+
+**Below that (runtime, mutable):**
 
 - A summary table — one row per W-item.
 - A pointer to `claims.md` if the plan has any claims.
 - An optional Notes section — runtime event log, per W-item.
+
+### Plan title and executive summary
+
+The first two sections orient any agent or human opening the plan: what is this phase trying to accomplish, what's intentionally not in it, when does it close.
+
+```markdown
+# Phase 1: Auth and tenancy foundation
+
+## Executive summary
+
+**Goal:** Establish multi-tenant auth and per-tenant data isolation as the substrate every later feature depends on.
+
+**Scope:**
+- Email + OAuth login
+- Tenant model with row-level isolation
+- Session management
+
+**Out of scope:**
+- SSO / SAML (deferred to Phase 3)
+- Tenant-level RBAC (Phase 2)
+
+**Success criteria:**
+- All W-items `done` and merged to `dev`
+- Phase-exit QA against `{{sub}}.dev.{{website}}.com` green
+- User authorizes promotion to `main`
+```
+
+The Strategist writes these at plan-draft time. They are not runtime ledger fields — phase pivots may revise them; routine W-item progress does not.
 
 ### Summary table
 
