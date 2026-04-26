@@ -188,8 +188,8 @@ Status writes on the active execution plan are **atomic with the git events that
 - **Strategist** — owns `held → in_progress` (claim approve / modify) and `held → blocked` (claim reject). Atomic with claim disposition: one commit moves the IC-NNN entry from "## Open" to "## Resolved" on `claims.md` AND flips the named W-items' Status on the index. If the disposition revises acceptance, the W-item file edit is part of the same commit.
 - **Developer** (Developer-mode phases) — owns Developer-mode lifecycle transitions ([ADR-018](../architecture/adr-018-developer-role.md)):
   - `pending → in_progress` on item claim (atomic with branch creation + the user-anchor message).
-  - `in_progress → code_review` when the user confirms the feature works (atomic with the rewind-summary commit on the W-item branch).
-  - `code_review → done` on blind self-review pass (atomic with the merge to `dev` + Implementation log written on the W-item file).
+  - `in_progress → code_review` when the user confirms the feature works (atomic with a "ready for review" commit on the W-item branch; Developer then spawns a Reviewer subagent).
+  - `code_review → done` on Reviewer-subagent ship verdict (atomic with the merge to `dev` + Implementation log written on the W-item file).
   - `code_review → in_progress` on a self-review block, user-mediated re-engagement (NOT auto-loop).
   - `in_progress → blocked` when an issue is unblockable.
   - `in_progress → held` when filing a claim mid-work (rare path; same shape as Integrator-QA's claim filing).

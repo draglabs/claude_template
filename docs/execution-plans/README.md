@@ -106,7 +106,7 @@ The Strategist writes these at plan-draft time. They are not runtime ledger fiel
 `Mode` is the Strategist's recommended execution style for the plan. Allowed values:
 
 - **`orchestrator`** — drafted with Orchestrator dispatch in mind (ADR-013 sequential or ADR-016 batch via Executor / Reviewer / QA peer subagents).
-- **`developer`** — drafted with Developer mode in mind (ADR-018 hands-on, user-invoked, rewind ritual + blind self-review).
+- **`developer`** — drafted with Developer mode in mind (ADR-018 hands-on, user-invoked; user-mediated QA loop + spawned Reviewer subagent for the code-review gate).
 - **absent** — no recommendation expressed.
 
 **The field is advisory** ([ADR-018](../architecture/adr-018-developer-role.md) §"Mode field is advisory"). Either mode can claim any `pending` item on any plan. The Strategist's recommendation is a hint about expected execution style, not a lock — items lock into a mode at claim time via the Status path they take (Orchestrator-mode items go `in_progress → done`; Developer-mode items go `in_progress → code_review → done`). Per-item collision is naturally enforced by the mode-specific Status paths; per-plan collision was over-broad enforcement.
@@ -232,7 +232,7 @@ The Implementation log is the one section that gets appended after draft, at the
 | **Touches** | Execution notes | Files the item will modify. Executor uses this as scope boundary. |
 | **References** | Execution notes | Optional read-only orientation files with line ranges (e.g. `src/legacy/foo.py:120-280`). Intended for port / migration / refactor work where pre-existing structure must be understood. Modifying one is scope creep. |
 | **Contingencies** | Contingencies | Pre-planned fallbacks and edge cases. Strategist-authored at draft time. |
-| **Implementation log** | Implementation log (post-completion) | Appended by the Developer at `code_review → done` flip. Captures approach, key decisions, pivots, surprises, followups. Compensates for chat-rewind discarding session journey. Developer mode only in v1 (ADR-018). |
+| **Implementation log** | Implementation log (post-completion) | Appended by the Developer at `code_review → done` flip. Captures approach, key decisions, pivots, surprises, followups. Persists the journey on the project after `/compact` collapses the persistent session and the spawned Reviewer subagent finishes (Reviewer never saw the journey). Developer mode only in v1 (ADR-018). |
 
 ## Parallel-safe field
 
@@ -259,7 +259,7 @@ Seven states: `pending`, `in_progress`, `code_review`, `held`, `blocked`, `done`
 The state machine has two mode-specific lifecycles. Orchestrator mode (ADR-013 sequential, ADR-016 batch) and Developer mode (ADR-018) share `pending`, `held`, `blocked`, `done`, `shipped` and the `held`/`blocked` recovery transitions. The middle of the lifecycle differs:
 
 - **Orchestrator mode** runs `in_progress → done` — Reviewer + QA gates run as peer subagents.
-- **Developer mode** runs `in_progress → code_review → done` — user mediates QA inside `in_progress` (no separate `qa` state); rewind ritual + blind self-review covers the `code_review` step.
+- **Developer mode** runs `in_progress → code_review → done` — user mediates QA inside `in_progress` (no separate `qa` state); a spawned Reviewer subagent (same brief as Orch sequential mode) covers the `code_review` step.
 
 A given W-item runs through one mode's lifecycle at a time. The plan-level `Mode` field is the Strategist's recommendation (advisory) — collision-freedom is enforced per W-item by the mode-specific Status paths (see §"Mode signaling" below).
 
@@ -304,20 +304,20 @@ A given W-item runs through one mode's lifecycle at a time. The plan-level `Mode
    pending ──▶ in_progress ──▶ code_review ──▶ done ──▶ shipped
                   │     ▲          │    ▲                  ▲
                   │     │          │    │                  │
-                  │     │          │    │ self-review      │ phase exit
-                  │     │          │    │ block, user      │ + user authorize
-                  │     │          │    │ re-engages       │ + Developer promotes
+                  │     │          │    │ Reviewer-block,  │ phase exit
+                  │     │          │    │ user re-engages  │ + user authorize
+                  │     │          │    │                  │ + Developer promotes
                   │     │          │    │
                   │     │          │    └────── (manual; not auto-loop)
                   │     │          │
-                  │     │          │ blind self-review pass
+                  │     │          │ Reviewer-subagent ship verdict
                   │     │          │ + merge to dev
                   │     │          │ + Implementation log on W-item file
                   │     │          ▼
                   │     │       (continue to done)
                   │     │
-                  │     │ user confirms feature works
-                  │     │ → flip happens here, atomic with rewind summary commit
+                  │     │ user confirms feature works → /compact (recommended) +
+                  │     │ "ready for review" commit + spawn Reviewer subagent
                   │     │
                   │     └──── user mediates QA loop inside in_progress
                   │            (Developer codes, user tests, iterate)
@@ -328,7 +328,7 @@ A given W-item runs through one mode's lifecycle at a time. The plan-level `Mode
                   └─▶ blocked (unblockable; user can't move it forward)
 ```
 
-Anchor moment: the Developer asks the user "ready to start coding W-X?" before the `pending → in_progress` flip. The user notes this as the chat-rewind anchor — at the `in_progress → code_review` flip, the Developer recommends rewinding chat to this point and pasting the rewind summary, putting the Developer's session into clean context for the blind self-review.
+Confirm + claim: the Developer asks the user "ready to start coding W-X?" before the `pending → in_progress` flip. At the `in_progress → code_review` flip (after user-mediated QA confirms the feature works), the Developer optionally runs `/compact` to compress its session context, commits a "ready for review" marker on the branch, and spawns a Reviewer subagent on the diff. The Reviewer's verdict drives `code_review → done` (ship + merge + Implementation log) or `code_review → in_progress` (block + user-mediated re-engagement).
 
 ### Mode signaling (per item, not per phase)
 
@@ -347,9 +347,9 @@ PLAN-WRITE DISCIPLINE applies to every transition: the writing agent reads the i
 | `pending` → `in_progress` | Orch | Orchestrator about to spawn Executor | Orchestrator | Dispatch event (Status flip + Branch populate; commit before spawning) |
 | `pending` → `in_progress` | Dev | Developer claims item after user confirms "ready to start coding" | Developer | Branch creation + anchor message; one plan-write commit |
 | `in_progress` → `done` | Orch | Executor pass + Orchestrator merges feature → `dev` | Orchestrator | The merge commit |
-| `in_progress` → `code_review` | Dev | User confirms feature works; Developer drafts rewind summary | Developer | Rewind summary commit on the W-item branch |
-| `code_review` → `done` | Dev | Developer's blind self-review passes; merge to `dev` | Developer | Merge commit + Implementation log on W-item file |
-| `code_review` → `in_progress` | Dev | Self-review surfaces a serious finding; user re-engages | Developer | Re-dispatch (user-mediated, NOT auto-loop) |
+| `in_progress` → `code_review` | Dev | User confirms feature works; Developer optionally `/compact`s, commits a "ready for review" marker, spawns Reviewer subagent | Developer | "Ready for review" commit on the W-item branch + Status flip in one PLAN-WRITE commit |
+| `code_review` → `done` | Dev | Reviewer subagent returns ship verdict; merge to `dev` | Developer | Merge commit + Implementation log on W-item file |
+| `code_review` → `in_progress` | Dev | Reviewer returns block + concerns; user re-engages on the disposition | Developer | Re-dispatch (user-mediated, NOT auto-loop) |
 | `in_progress` → `blocked` | Orch | Executor stumped, or Integrator-QA integration failure (confidence <80%) | Orchestrator | Stumped notice (Status flip + index Notes line) |
 | `in_progress` → `blocked` | Dev | Unblockable issue; user can't move work forward | Developer | Stumped notice (Status flip + index Notes line) |
 | `in_progress` → `held` | Orch (batch) | Integrator-QA files a claim naming the W-item | Integrator-QA | Claim filing — one commit writes `claims.md` (IC-NNN under Open) + `plan.md` (Status flip) |
@@ -374,12 +374,12 @@ The `held` state replaces the convention (used in earlier ADR-016 drafts) of lea
 
 ### `code_review` semantics
 
-A W-item enters `code_review` only in Developer mode, when the user has confirmed the feature works and the Developer is preparing the rewind hand-off. The branch carries the implementation; the rewind summary has been committed; the Developer has recommended the user rewind chat and paste the summary. Post-rewind, the Developer reads `plan.md`, sees the item at `code_review`, and performs blind self-review.
+A W-item enters `code_review` only in Developer mode, when the user has confirmed the feature works and the Developer is dispatching the code-review gate. The branch carries the implementation; a "ready for review" marker has been committed; the Developer has spawned a Reviewer subagent (`docs/dev_framework/templates/reviewer-brief.md`) on the diff. The Reviewer is a fresh process with its own context — it sees the W-item brief + diff, not the Developer's coding journey.
 
 Two outcomes:
 
-- **Pass.** Merge to `dev`, write Implementation log on the W-item file, flip `code_review → done` in one commit.
-- **Block.** Surface findings to user. Path back to `in_progress` is user-mediated — the Developer does not auto-loop. The user chooses: fix-and-retry (`code_review → in_progress`), ship-with-known-limitation (recorded as a user override in the Implementation log + plan Notes; flip to `done`), or escalate.
+- **Ship.** Developer merges to `dev`, writes Implementation log on the W-item file, flips `code_review → done` in one commit.
+- **Block.** Reviewer returns concerns. Developer surfaces them to user. Path back to `in_progress` is user-mediated — the Developer does not auto-loop. The user chooses: fix-and-retry (`code_review → in_progress` + re-code + re-confirm via user QA + re-spawn Reviewer), ship-with-known-limitation (recorded as a user override in the Implementation log + plan Notes; flip to `done`), or escalate.
 
 ### Reconciliation (on session start)
 
@@ -387,8 +387,8 @@ A fresh Orchestrator session MUST reconcile the plan ledger against git reality 
 
 A fresh Developer session reconciles similarly per its bootstrap (`developer.md`). The state IS the memory:
 
-- Item at `code_review` → post-rewind blind-self-review path; propose to do that before any new work.
-- Item at `in_progress` after a context reset → ambiguous (mid-coding before rewind, or mid-QA-loop). Confirm with user.
+- Item at `code_review` → Reviewer subagent didn't return (session reset before verdict, or interrupted); propose re-spawning the Reviewer brief on the same branch + SHA before any new work. Reviewer is stateless and idempotent.
+- Item at `in_progress` after a context reset → ambiguous (mid-coding, mid-QA-loop, or pre-`/compact`). Confirm with user.
 - Item at `held` → awaiting Strategist disposition; skip.
 - Otherwise → propose top `pending` item by critical path (Depends-on graph).
 

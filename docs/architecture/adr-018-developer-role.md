@@ -1,4 +1,4 @@
-# ADR-018: Developer role with rewind doctrine
+# ADR-018: Developer role (hands-on, user-in-loop coding)
 
 **Status:** accepted
 **Date:** 2026-04-25
@@ -12,13 +12,11 @@ Two specific frictions surfaced:
 
 1. **Conversational coding has no first-class shape.** The user can talk to a Claude Code session and code with it directly today, but doing so leaves the framework's plan ledger behind — Status doesn't flip, branches aren't tracked, the artifacts the framework expects (W-item file references, lessons learned in commits, plan-side Notes) aren't produced. The user-in-the-loop mode exists in practice as ad-hoc work outside the SOP.
 
-2. **Self-review by the same agent is biased.** A Reviewer subagent (Orchestrator mode) gets fresh-eyes review by being a different process, but it loses project context too — it never wrote the work, never talked to the user about it, never made the calls. The user wanted a third option: same persistent owner for the work and the review, but with the journey of the work wiped from session context. Concrete mechanism: the Claude Code chat-rewind affordance — back the chat up to a checkpoint, paste a summary as if to say "it's already done," and the session reads the work fresh.
-
-The rewind mechanism is novel. It enables blind self-review without spawning a separate agent and without losing the persistent ownership.
+2. **Code-review gate for hands-on work.** Orchestrator mode runs a Reviewer subagent on every diff; Developer mode needs the same gate, but invoked by the persistent Developer (since the user is the QA gate, not the Reviewer dispatcher). The Developer spawns the Reviewer subagent at `in_progress → code_review` and reads the verdict. Same brief, same fresh-eyes property — different invocation point.
 
 ## Decision
 
-Add a fourth product-side persistent role, **Developer**, that operates as a parallel mode to Orchestrator dispatch. The Developer is user-invoked, drives one W-item at a time conversationally, runs a user-mediated QA loop within `in_progress`, produces a rewind summary at done-of-coding, and post-rewind performs blind self-review on its own work using clean context.
+Add a fourth product-side persistent role, **Developer**, that operates as a parallel mode to Orchestrator dispatch. The Developer is user-invoked, drives one W-item at a time conversationally, runs a user-mediated QA loop within `in_progress`, then at user-confirmation optionally `/compact`s its session context and spawns a Reviewer subagent on the diff for the code-review gate. The Developer remains the persistent owner of each W-item end-to-end.
 
 ### Mode field is advisory, not binding (v2)
 
@@ -42,6 +40,18 @@ ADR-018 originally specified per-phase mode-exclusivity enforced via the Mode fi
 The correct read: per-W-item Status paths are the natural collision boundary. Per-plan exclusivity adds friction without reducing collision risk. v2 (current) walks back to: Mode field as advisory recommendation, prompt-on-explicit-mismatch instead of refuse, mixed-mode phases allowed, claim attribution in Notes for at-a-glance ownership.
 
 A **per-W-item** `Mode` override field is also rejected — once items lock into a mode at claim time via Status path, the override field would be redundant. The Notes-line attribution + Status-path inference covers what a per-item Mode field would cover.
+
+#### Revision (v3): rewind retired
+
+ADR-018 v1 specified a **chat-rewind blind self-review** as the code-review gate: at the `in_progress → code_review` flip, the Developer would produce a structured rewind summary, recommend the user rewind chat to a pre-coding anchor and paste the summary, then read the resulting clean-context state and perform blind self-review on its own work. The novel value was "same persistent session, different context" — fresh-eyes review without spawning a separate process.
+
+Field testing showed the ritual was **cumbersome in practice**: multi-step user UI gymnastics (rewind chat, paste summary, re-prompt) on every W-item, easy to skip under time pressure, and harness-coupled (depended on Claude Code's chat-rewind affordance). The user described it as "pretty cumbersome" after first encounter.
+
+v3 retires the rewind ritual and replaces it with: **`/compact` (recommended) for the persistent session's context budget + a spawned Reviewer subagent for the actual code-review gate**. The Reviewer is a fresh process with its own context — same brief Orchestrator-mode sequential dispatch uses (ADR-013) — so it gets the fresh-eyes property by virtue of being a separate session, not via context manipulation in the same session. The Developer remains the persistent owner: it spawned the Reviewer, reads the verdict, decides the merge, writes the Implementation log.
+
+The original v1 rejection of "spawn Reviewer subagent" cited "loses project context" as the concern. That was overstated — the Reviewer brief reconstructs project context from the W-item file + diff, the same artifacts a rewound self would read. The actual difference between rewound-self and Reviewer-subagent is "same session" vs "different session," not "context-aware" vs "context-blind." Workflow simplicity wins.
+
+What survives from v1: the Developer is still a persistent role, still drives the user-mediated QA loop, still owns the W-item end-to-end via the persistent session, still writes the Implementation log at done. The lifecycle states are unchanged (`pending → in_progress → code_review → done → shipped`); only the mechanism behind `code_review` changes.
 
 ### State machine extension: `code_review`
 
@@ -86,7 +96,7 @@ Adds a fourth section to the W-item file template — appended by the Developer 
 **Followups / loose ends:** ...
 ```
 
-This is **Developer-mode-specific** in v1. The chat-rewind discards session journey; the Implementation log persists it on the project. Other modes (Orchestrator-dispatched Executor) capture journey in commit messages and the plan's Notes section already; extending Implementation log to those modes is an option for the future, not v1.
+This is **Developer-mode-specific** in v1. `/compact` collapses the persistent session's journey at the QA-pass moment, and the spawned Reviewer subagent never saw the journey to begin with — the Implementation log persists it on the project as the only durable record. Other modes (Orchestrator-dispatched Executor) capture journey in commit messages and the plan's Notes section already; extending Implementation log to those modes is an option for the future, not v1.
 
 The Implementation log does NOT violate ADR-017's "static SOW" principle for the W-item file. The log is appended at done-flip and is then static for the lifetime of the project. ADR-017 was about preventing Status drift via mid-flight runtime mutations of the W-item file. A done-flip append is a different shape and does not reintroduce drift bait.
 
@@ -104,10 +114,6 @@ Why two invocations instead of one role with conditional behavior: the working-d
 **N-Parallel sessions** (a third or fourth Parallel Developer alongside the Default) are mechanically supported — each in its own worktree, each does its own non-competing scan at boot. Diminishing returns past two because user attention serializes through the QA loop; documented but not optimized for.
 
 **The "check dev" handoff** (Default Dev pulling Parallel's merged work into its own feature branch) is standard git: `git fetch origin dev && git merge origin/dev`. No framework-special protocol.
-
-### Rewind ritual is harness-specific
-
-The rewind summary + chat-history-rewind is a **Claude Code-specific** affordance. Adopters running on other harnesses use the Developer role minus the ritual — fall back to spawning a Reviewer subagent (Orchestrator-mode mechanism) for code review of Developer-driven items, or omit blind review and rely on user QA + Implementation log alone. The deviation gets recorded in `dev_framework_exceptions.md` per the standard exception protocol.
 
 ### Five-surface role-add
 
@@ -129,7 +135,7 @@ Plus the spec/doc updates:
 **What this buys:**
 
 - **First-class shape for conversational coding.** The user-in-the-loop mode now produces the same plan ledger, branches, and persistent record as Orchestrator mode. Work no longer has to fall outside the framework to be done conversationally.
-- **Blind self-review without losing ownership.** The rewind ritual gives fresh-eyes review by clearing process context while preserving the persistent session as the work's owner. Reviewer subagents lose project context entirely; the rewound Developer keeps it via the Implementation log, the W-item file, and the diff.
+- **Fresh-eyes code review without losing ownership.** The Reviewer subagent gives fresh-eyes review by being a separate process; the Developer remains the persistent owner because it spawned the Reviewer, reads the verdict, decides the merge, and writes the Implementation log. Same Reviewer brief Orchestrator-mode sequential dispatch uses (no new mechanism).
 - **Documented journey on the project.** The Implementation log captures what actually happened — pivots, advisor calls, decisions reversed — in a place that survives session resets and shows up next to the W-item itself. Commit messages alone don't aggregate this.
 - **Disciplined escalation.** The Developer follows an **80/20 confidence ladder** at decision forks (self ≥80% → act; self <80% → advisor or consultant subagent; advisor <80% → escalate to user), consistent with Integrator-QA's claim-filing threshold. Mechanizes "when to interrupt the user" so the dialogue stays high-signal. Detail in `developer.md` §"Confidence-driven escalation (80/20 rule)".
 
@@ -145,23 +151,23 @@ Plus the spec/doc updates:
 
 - **Does not change Orchestrator dispatch.** ADR-013 sequential mode and ADR-016 batch mode flow unchanged. The new state `code_review` does not appear in Orchestrator-mode lifecycles.
 - **Does not change claim semantics.** ADR-016's claim shape and ADR-017's claim location unchanged. Developer becomes a second filer (after Integrator-QA), but the protocol is identical.
-- **Does not deprecate the Reviewer subagent.** Reviewer is still spawned in Orchestrator sequential mode (ADR-013) and absorbed by Integrator-QA in batch mode (ADR-016). Developer mode replaces Reviewer with the rewound self for its own items only.
+- **Does not deprecate the Reviewer subagent — extends its use.** Reviewer is spawned in Orchestrator sequential mode (ADR-013), absorbed by Integrator-QA in batch mode (ADR-016), AND now spawned by the Developer at `in_progress → code_review` (ADR-018 v3). Same brief, three invocation points.
 - **Does not change phase exit gates.** Phase exit still requires QA against the dev environment + user authorization, regardless of mode. The Developer can run the phase-exit smoke pass itself or coordinate with the user to run it; the gate is not waived.
 
 ## Alternatives considered
 
-1. **Developer as Orchestrator-dispatched Executor variant.** Rejected — subagents are stateless invocations; there is no chat to rewind, no paste interaction, no continued session post-rewind. The rewind ritual cannot be implemented in a subagent.
+1. **Developer as Orchestrator-dispatched Executor variant.** Rejected — subagents are stateless invocations; the user-mediated QA loop and the persistent Implementation-log discipline both require a session the user talks to directly across many turns. Developer must be a persistent role, not a dispatched subagent.
 2. **Per-W-item `Mode` field on plan.md.** Rejected — once items lock into a mode at claim time via Status path (Developer's `in_progress → code_review → done` versus Orchestrator's `in_progress → done`), an explicit per-item field would be redundant. Notes-section claim attribution (`"W-A1 — claimed by Developer YYYY-MM-DD"`) covers at-a-glance ownership for in-flight items.
 
    **Per-plan binding Mode field with refuse-on-mismatch (original ADR-018 v1, walked back in v2).** Initially specified as the mechanism behind per-phase mode-exclusivity. Walked back after field testing showed it locked the Developer out of Strategist-drafted Orchestrator plans even when no W-item had been claimed. The actual collision boundary is per-W-item (enforced by Status paths), not per-plan. v2 reframes Mode as advisory with prompt-on-explicit-mismatch instead of refuse.
-3. **Self-blind QA via spawning a Reviewer subagent.** Rejected — Reviewer subagent is ephemeral and stateless; loses the project context that makes Developer-mode work coherent. The novel value of the rewind mechanism is "same session, different context" — Reviewer subagent gives "different session, no context."
+3. **Code-review via chat-rewind + blind self-review (original v1, walked back in v3).** Rejected after field testing. The rewind ritual was novel — same persistent session, different context via Claude Code's chat-rewind affordance — but cumbersome in practice (multi-step user UI gymnastics: rewind chat, paste summary, re-prompt). Replaced in v3 by spawning a Reviewer subagent on the diff, which gets the same fresh-eyes property via separate process at lower workflow cost. The "lose project context" concern about Reviewer subagents (the original v1 rejection rationale) was overstated — the Reviewer brief reconstructs project context from the W-item file + diff, the same artifacts a rewound self would read. See §"Revision (v3): rewind retired" below.
 4. **Add a `qa` state.** Rejected — the user is the QA gate in real-time. State doesn't bounce between `qa` and `in_progress`; `in_progress` covers the whole loop until user confirmation. A separate `qa` state would never be observed long enough to matter.
-5. **Universal Implementation log (all modes).** Deferred — Developer-mode-specific in v1 because that's where chat-rewind makes a persistent journey record load-bearing. Easy to extend if Orchestrator-mode usage shows benefit.
+5. **Universal Implementation log (all modes).** Deferred — Developer-mode-specific in v1 because that's where `/compact` collapses the persistent session's journey and the spawned Reviewer never sees it; the log is the only durable journey record. Easy to extend to Orchestrator mode if usage shows benefit.
 6. **Skip ADR; document in role doc only.** Rejected — adding a role + state machine extension + new write authority is a load-bearing decision touching seven framework surfaces. Future readers need a single decision record explaining why.
 
 ## Acceptance criteria for the shipping PR
 
-- `docs/dev_framework/developer.md` exists, describes the role's behavior end-to-end (bootstrap with Mode check, lifecycle, rewind ritual, blind review, Implementation log, claim filing). Tightens the "does not spawn subagents" clause to default-flow only, with the Reviewer-fallback harness exception named explicitly. Documents both invocation patterns (Default + Parallel) with a Non-competing scan procedure for Parallel.
+- `docs/dev_framework/developer.md` exists, describes the role's behavior end-to-end (bootstrap with Mode check, lifecycle, user QA loop, /compact + Reviewer-subagent code-review handoff, Implementation log, claim filing). Documents both invocation patterns (Default + Parallel) with a Non-competing scan procedure for Parallel.
 - `CLAUDE.md` §Roles table has TWO rows — `"you are the Developer"` (Default) and `"you are the parallel developer"` (Parallel) — pointing at the same role doc.
 - `docs/dev_framework/dev_framework.md` has Developer in the Role docs table; the agent-stack diagram or surrounding prose names it as a parallel mode.
 - `docs/dev_framework/context-management.md` Layer 1 row for Developer names `coding-standards.md` + the active plan's `plan.md` as bootstrap reads.
