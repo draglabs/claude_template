@@ -108,6 +108,7 @@ Plus the spec/doc updates:
 - **First-class shape for conversational coding.** The user-in-the-loop mode now produces the same plan ledger, branches, and persistent record as Orchestrator mode. Work no longer has to fall outside the framework to be done conversationally.
 - **Blind self-review without losing ownership.** The rewind ritual gives fresh-eyes review by clearing process context while preserving the persistent session as the work's owner. Reviewer subagents lose project context entirely; the rewound Developer keeps it via the Implementation log, the W-item file, and the diff.
 - **Documented journey on the project.** The Implementation log captures what actually happened — pivots, advisor calls, decisions reversed — in a place that survives session resets and shows up next to the W-item itself. Commit messages alone don't aggregate this.
+- **Disciplined escalation.** The Developer follows an **80/20 confidence ladder** at decision forks (self ≥80% → act; self <80% → advisor or consultant subagent; advisor <80% → escalate to user), consistent with Integrator-QA's claim-filing threshold. Mechanizes "when to interrupt the user" so the dialogue stays high-signal. Detail in `developer.md` §"Confidence-driven escalation (80/20 rule)".
 
 **What this costs:**
 
