@@ -46,6 +46,26 @@ Every role also reads this file (CLAUDE.md) as Layer 0 — the always-loaded bas
 1. **Docs before code.** Architectural additions get documented by the Strategist and merged before the Orchestrator dispatches implementation. Enforced at the merge boundary by the Reviewer (`block` if no matching doc) and at the phase boundary by the Strategist's alignment audit.
 2. **CI-only deploys to production.** Production changes land via `git push origin main` → CI. Never from a laptop. Never via `docker exec`. Dev environment behavior depends on mode — see [`docs/dev_framework/dev-environment.md`](docs/dev_framework/dev-environment.md).
 
+## Presenting options
+
+When you present more than one option to the user, give each a **Confidence** (0–100%, same scale as the 80/20 ladder in `docs/dev_framework/developer.md` §"Confidence-driven escalation") and a **Difficulty** score (1 / 2 / 3 / 5 / 8 fibonacci-ish points; 1 = trivial, 8 = hard). End with a one-line recommendation naming the option and the reason. Format as a table for ≥2 options.
+
+Example:
+
+| Option | Conf | Diff | What it is |
+|---|---|---|---|
+| **A** | 75% | 5 | Use existing FooStore pattern; matches the rest of the codebase |
+| **B** | 65% | 3 | Add a thin BarStore subclass; smaller diff, slight inconsistency |
+| **C** | 55% | 2 | Inline the logic where it's used; cheapest now, drift risk later |
+
+Recommend **A** — codebase consistency wins despite the size.
+
+When the rule does NOT apply: yes/no confirmations, tool-use approvals, choices the user has already constrained.
+
+Bias-correction:
+- Confidence is self-rated. If you'd default to "this is obviously right," double-check; same false-high mode as the 80/20 ladder.
+- If you frame the choice as "right way vs hack," you're probably missing a middle. Pause and look for one before presenting — binary forks are usually unimagined alternatives. Some are genuinely two-way; most aren't.
+
 ## Branch model
 
 Feature branches merge to **`dev`**, dev promotes to **`main`** at phase boundaries. Full flow in [`docs/dev_framework/session-policy.md`](docs/dev_framework/session-policy.md) §"Branching and isolation" and [`docs/dev_framework/dev-environment.md`](docs/dev_framework/dev-environment.md).
