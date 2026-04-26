@@ -30,7 +30,7 @@ N+1 Parallel Developers (a third or fourth session) are mechanically supported �
 
 ## What it does
 
-- **Crawls the plan on bootstrap and proposes the next item.** Reads `plan.md`, reconciles state, and recommends what to work on next. The proposal step diverges by invocation pattern:
+- **Crawls the plan on bootstrap and proposes the next item.** Reads `plan.md`, reconciles state (including `git worktree list` against plan Status to surface stale worktrees from prior items — see §"Cleanup at done-flip"), and recommends what to work on next. The proposal step diverges by invocation pattern:
   - **Default Developer** → top `pending` item by critical path (Depends-on graph).
   - **Parallel Developer** → first `pending` item that doesn't compete with already-claimed items (see §"Non-competing scan").
 
@@ -157,8 +157,8 @@ pending → in_progress → code_review → done → shipped
 5. **/compact + handoff commit.** When user confirms, Developer optionally runs `/compact` to compress its session context for the next item (recommended, not strictly required). Commits a "ready for review" marker on the branch and flips Status `in_progress → code_review` (one PLAN-WRITE commit). Push.
 6. **Spawn Reviewer subagent.** Developer invokes the Reviewer brief (`docs/dev_framework/templates/reviewer-brief.md`) via the Agent tool. Brief inputs: branch name + head SHA, working directory path (Default Dev: main checkout; Parallel Dev: worktree path), W-item file path. Reviewer loads `coding-standards.md` itself and returns a structured ship/block verdict.
 7. **Reviewer verdict + merge.**
-   - **Ship** → Developer merges to `dev`, writes Implementation log on the W-item file, flips `code_review → done` in one commit (merge + log + Status).
-   - **Block + concerns** → Developer surfaces concerns to user. The path back to `in_progress` is **user-mediated** — Developer doesn't auto-loop. User decides: fix-and-retry (`code_review → in_progress` + re-code with concerns as input + re-spawn Reviewer after re-confirming via the user QA loop), ship-with-known-limitation (recorded as user override in the Implementation log + plan Notes; flip to `done`), or escalate.
+   - **Ship** → Developer merges to `dev`, writes Implementation log on the W-item file, flips `code_review → done` in one commit (merge + log + Status). **Then runs cleanup** (see §"Cleanup at done-flip" below): remove worktree (Parallel only), delete local branch, delete remote branch.
+   - **Block + concerns** → Developer surfaces concerns to user. The path back to `in_progress` is **user-mediated** — Developer doesn't auto-loop. User decides: fix-and-retry (`code_review → in_progress` + re-code with concerns as input + re-spawn Reviewer after re-confirming via the user QA loop), ship-with-known-limitation (recorded as user override in the Implementation log + plan Notes; flip to `done` + run cleanup), or escalate.
 8. **Phase exit.** When all items in the phase are `done`, user authorizes promotion. Developer promotes `dev → main`, flips `done → shipped` (one commit) for each item.
 
 ## Plan-write discipline (Developer)
@@ -170,7 +170,7 @@ Every Status write follows the same discipline as Orchestrator / Integrator-QA /
 3. Commit alongside the trigger event in ONE commit. Examples:
    - `pending → in_progress`: commit covers Status flip + Branch field populate + Notes claim line. Branch (Default) or worktree+branch (Parallel) creation happens immediately before/after as separate git operations.
    - `in_progress → code_review`: commit covers Status flip + a "ready for review" marker on the W-item branch. Reviewer subagent is spawned right after.
-   - `code_review → done`: commit covers the merge to `dev` + Implementation log on the W-item file + Status flip.
+   - `code_review → done`: commit covers the merge to `dev` + Implementation log on the W-item file + Status flip. **Cleanup (worktree + branch deletion) runs after the push succeeds** — see §"Cleanup at done-flip" in the Code-review section.
    - `in_progress → held`: commit covers Status flip + new IC-NNN entry under "## Open" in `claims.md`.
 4. Verify push (`git push origin <branch>` or `origin dev` / `origin main` per the merge target). The plan must be pushed before any further work, so other roles (Strategist on a triage pass, Orchestrator inspecting state) read truth.
 
@@ -201,6 +201,42 @@ The Developer remains the **persistent owner** of the W-item: it spawned the Rev
 ### Recovery from interrupted reviews
 
 If a session ends or context resets while a Reviewer subagent is in flight, the next Developer session bootstrap will see the W-item at `code_review` Status. Behavior: confirm with the user, then re-spawn the Reviewer brief on the same branch + SHA. Reviewer subagents are stateless and idempotent; re-running on the same diff yields the same verdict shape (the verdict text may differ, but the ship/block decision should be consistent).
+
+### Cleanup at done-flip
+
+After the `code_review → done` commit pushes successfully (merge to `dev` confirmed on the remote), Developer runs cleanup. This is a per-W-item discipline — every Developer-mode W-item that ships through to `done` must clean up its worktree + branch.
+
+**Default Developer** (in main checkout, on feature branch when the merge happened):
+
+```bash
+git checkout dev               # leave the feature branch
+git pull origin dev            # sync the just-merged state
+git branch -d w-<id>/<slug>    # delete local branch (safe — already merged)
+git push origin --delete w-<id>/<slug>   # delete remote branch
+```
+
+**Parallel Developer** (in worktree, on feature branch when the merge happened):
+
+```bash
+cd <main checkout path>        # leave the worktree before removing it
+git fetch origin
+git checkout dev && git pull origin dev
+git worktree remove /tmp/worktrees/<project>/w-<id>-<slug>
+git branch -d w-<id>/<slug>
+git push origin --delete w-<id>/<slug>
+```
+
+If any step fails (e.g., `git branch -d` reports "not fully merged" because the local main checkout's view of `dev` is stale, or `git worktree remove` says the worktree is dirty), surface to the user — do NOT force (`-D`, `--force`) without explicit user authorization. Stale or dirty state is a signal that the merge didn't complete the way you thought.
+
+**Why all three** (worktree + local branch + remote branch): each is a separate git artifact with its own staleness mode. Skipping any one accumulates residue across W-items and the user has to mass-clean later (the failure mode the user reported when this discipline was missing).
+
+**On bootstrap, reconcile against residue.** When a Developer session starts, after reading `plan.md` it should also run `git worktree list` and check each non-main worktree's W-id against the plan's Status:
+
+- Worktree exists, plan Status is `done` or `shipped` → cleanup overdue. Surface to user before proposing new work: "I see worktree `w-<id>-<slug>` on disk for an item already at Status `<done/shipped>` — should I clean it up before claiming the next item?"
+- Worktree exists, plan Status is `in_progress` / `code_review` / `held` → in-flight work, leave alone.
+- Worktree exists, no matching W-id on the plan → orphan, surface to user (might be a different plan's item, or stale residue from an archived phase).
+
+The bootstrap reconciliation is the safety net for cleanup discipline that didn't run (session crashed, prior agent forgot, etc.). It catches what the per-item cleanup misses.
 
 ## Implementation log
 
