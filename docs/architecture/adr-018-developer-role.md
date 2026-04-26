@@ -90,6 +90,21 @@ This is **Developer-mode-specific** in v1. The chat-rewind discards session jour
 
 The Implementation log does NOT violate ADR-017's "static SOW" principle for the W-item file. The log is appended at done-flip and is then static for the lifetime of the project. ADR-017 was about preventing Status drift via mid-flight runtime mutations of the W-item file. A done-flip append is a different shape and does not reintroduce drift bait.
 
+### Invocation patterns: Default and Parallel
+
+The Developer has two named invocations sharing one role doc, lifecycle, and discipline:
+
+- **Default Developer** (`"you are the Developer"`) — works in the user's main checkout on a feature branch (`w-<id>/<slug>`). Bootstrap proposes the top critical-path `pending` item. The session the user collaborates with most actively.
+- **Parallel Developer** (`"you are the parallel developer"`) — works in a worktree at `/tmp/worktrees/<project>/w-<id>-<slug>` (same path scheme as Orchestrator-mode Executors per ADR-013). Bootstrap does a **non-competing scan**: reads claimed items (Status `in_progress` or `code_review`, attributed in plan Notes), checks each `pending` item's `Touches` + Parallel-safe shared surfaces (per ADR-016 / `execution-plans/README.md` §"Parallel-safe field"), proposes the first non-conflicting item.
+
+Why two invocations instead of one role with conditional behavior: the working-directory model is fundamentally different (in-place vs worktree) and the bootstrap scan is fundamentally different (critical-path vs non-competing). Conditional behavior in one role would require the session to ask "am I parallel or not?" at boot — fragile. Two named triggers make the user's intent unambiguous and the session's behavior deterministic from session start.
+
+**Concurrent claim safety** is handled by PLAN-WRITE DISCIPLINE — read-fresh + commit + verify-pushed catches simultaneous claims at the push step, and the loser pulls + re-scans + picks something else. No new mechanism needed.
+
+**N-Parallel sessions** (a third or fourth Parallel Developer alongside the Default) are mechanically supported — each in its own worktree, each does its own non-competing scan at boot. Diminishing returns past two because user attention serializes through the QA loop; documented but not optimized for.
+
+**The "check dev" handoff** (Default Dev pulling Parallel's merged work into its own feature branch) is standard git: `git fetch origin dev && git merge origin/dev`. No framework-special protocol.
+
 ### Rewind ritual is harness-specific
 
 The rewind summary + chat-history-rewind is a **Claude Code-specific** affordance. Adopters running on other harnesses use the Developer role minus the ritual — fall back to spawning a Reviewer subagent (Orchestrator-mode mechanism) for code review of Developer-driven items, or omit blind review and rely on user QA + Implementation log alone. The deviation gets recorded in `dev_framework_exceptions.md` per the standard exception protocol.
@@ -146,11 +161,11 @@ Plus the spec/doc updates:
 
 ## Acceptance criteria for the shipping PR
 
-- `docs/dev_framework/developer.md` exists, describes the role's behavior end-to-end (bootstrap with Mode check, lifecycle, rewind ritual, blind review, Implementation log, claim filing). Tightens the "does not spawn subagents" clause to default-flow only, with the Reviewer-fallback harness exception named explicitly.
-- `CLAUDE.md` §Roles table has a Developer row with invocation trigger and bootstrap reads.
+- `docs/dev_framework/developer.md` exists, describes the role's behavior end-to-end (bootstrap with Mode check, lifecycle, rewind ritual, blind review, Implementation log, claim filing). Tightens the "does not spawn subagents" clause to default-flow only, with the Reviewer-fallback harness exception named explicitly. Documents both invocation patterns (Default + Parallel) with a Non-competing scan procedure for Parallel.
+- `CLAUDE.md` §Roles table has TWO rows — `"you are the Developer"` (Default) and `"you are the parallel developer"` (Parallel) — pointing at the same role doc.
 - `docs/dev_framework/dev_framework.md` has Developer in the Role docs table; the agent-stack diagram or surrounding prose names it as a parallel mode.
 - `docs/dev_framework/context-management.md` Layer 1 row for Developer names `coding-standards.md` + the active plan's `plan.md` as bootstrap reads.
-- `.claude/hooks/session-reorient.sh` includes "developer" in the role-list strings in all four sources (startup / resume / compact / clear).
+- `.claude/hooks/session-reorient.sh` includes both `"you are the developer"` and `"you are the parallel developer"` in the role-list strings in all four sources (startup / resume / compact / clear).
 - `docs/execution-plans/README.md`:
   - State machine adds `code_review`.
   - Transition table adds the Developer-owned transitions.

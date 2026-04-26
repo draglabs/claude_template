@@ -11,7 +11,7 @@ A multi-instance model where four **product-side** persistent Claude Code sessio
 - **Strategist** — the architect. Owns planning docs. Doesn't read code.
 - **Designer** — owns UI mockups. Writes only to `mockups/`.
 - **Orchestrator** — dispatches implementation work and coordinates peer review gates. Doesn't write code (except emergency bypass — see [`session-policy.md`](session-policy.md) §"When to suspend this policy").
-- **Developer** — user-invoked persistent session for hands-on coding work with rewind ritual + blind self-review ([ADR-018](../architecture/adr-018-developer-role.md)). Parallel mode to Orchestrator dispatch; mixed-mode phases allowed (per-item mode locking via Status path).
+- **Developer** — user-invoked persistent session for hands-on coding work with rewind ritual + blind self-review ([ADR-018](../architecture/adr-018-developer-role.md)). Two named invocations: **Default** (`"you are the Developer"`, works in main checkout on a feature branch) and **Parallel** (`"you are the parallel developer"`, works in a worktree, runs alongside Default on a non-competing item). Parallel mode to Orchestrator dispatch; mixed-mode phases allowed (per-item mode locking via Status path).
 
 Work gets done via two parallel modes — **a phase runs end-to-end under one mode**:
 
@@ -64,7 +64,7 @@ The stack above shows sequential (per-task) Orchestrator dispatch. For W-items m
 | Strategist | [`strategist.md`](strategist.md) | strategist.md + planning docs |
 | Designer | [`designer.md`](designer.md) | designer.md + main app UI components |
 | Orchestrator | [`session-policy.md`](session-policy.md) | session-policy.md + active execution plan |
-| Developer | [`developer.md`](developer.md) | developer.md + coding-standards.md + active plan's plan.md |
+| Developer (Default and Parallel) | [`developer.md`](developer.md) | developer.md + coding-standards.md + active plan's plan.md. Two invocations sharing one doc: Default in main checkout, Parallel in a worktree |
 | Template Developer | [`template-developer.md`](template-developer.md) | template-developer.md + dev_framework.md (template repo only; no-op in adopter repos) |
 
 Subagent briefs (load on spawn, not at session start):

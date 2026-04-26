@@ -24,7 +24,7 @@ case "$source_value" in
 Before substantive action:
   1. Confirm which role you are operating as. See CLAUDE.md §Roles. If the
      user has not declared a role ("you are a strategist" / "you are the
-     orchestrator" / "you are a designer" / "you are the developer" / "you are the template developer"),
+     orchestrator" / "you are a designer" / "you are the developer" / "you are the parallel developer" / "you are the template developer"),
      ask. Note: "template developer" is only meaningful in the canonical
      claude_template repo.
   2. After the role is confirmed, load your role's Layer 1 docs per
@@ -70,7 +70,7 @@ EOF
 
 Before acting:
   1. If the user has not declared a role ("you are a strategist" / "you are
-     the orchestrator" / "you are a designer" / "you are the developer" / "you are the template developer"),
+     the orchestrator" / "you are a designer" / "you are the developer" / "you are the parallel developer" / "you are the template developer"),
      ask. "Template developer" is only meaningful in the canonical claude_template
      repo. If the user is changing role from before, state the new role explicitly.
   2. After the role is confirmed: load your role doc

@@ -1,12 +1,40 @@
 # Developer
 
-The Developer is a persistent Claude Code session (Opus) that the user invokes for hands-on coding work where the user wants to be in the loop. It is a **parallel mode** to the Orchestrator → Executor → Reviewer → QA dispatch chain — not a subagent of any other role, not dispatched by anything. The user invokes it directly with "you are the Developer" and drives the session conversationally.
+The Developer is a persistent Claude Code session (Opus) that the user invokes for hands-on coding work where the user wants to be in the loop. It is a **parallel mode** to the Orchestrator → Executor → Reviewer → QA dispatch chain — not a subagent of any other role, not dispatched by anything. The user invokes it directly and drives the session conversationally.
 
 The Developer's defining trait is a **context-management ritual** built into its lifecycle: when a feature is coded and the user has confirmed it works, the Developer produces a structured summary, the user rewinds the chat to a pre-coding anchor, pastes the summary as if to say "this is already done," and the Developer — now in clean context — performs a blind self-review on its own work. The session is the same; the context history of doing the work is gone. This produces fresh-eyes review without leaving the persistent session.
 
+## Invocation patterns
+
+The Developer has two named invocations sharing one role doc, lifecycle, and discipline. The user picks at session start based on whether another Developer session is already running.
+
+### Default Developer — `"you are the Developer"`
+
+- Works in your **main checkout** — the directory the terminal is `cd`'d into when `claude` started.
+- At claim time creates a feature branch (`w-<id>/<slug>`) in place: `git checkout -b w-<id>/<slug> origin/dev`. No worktree.
+- Bootstrap scan proposes the **top critical-path** `pending` item by Depends-on graph.
+- The session you actively collaborate with — most coding, most QA-loop iteration, most rewind cycles.
+
+### Parallel Developer — `"you are the parallel developer"`
+
+- Works in a **worktree** at `/tmp/worktrees/<project>/w-<id>-<slug>` (same path scheme Orchestrator-mode Executors use; see `session-policy.md` §"Branching and isolation").
+- At claim time creates the worktree atomically with the `pending → in_progress` flip: `git worktree add -b w-<id>/<slug> /tmp/worktrees/<project>/w-<id>-<slug> origin/dev`, then `cd` into it for the rest of the session.
+- Bootstrap scan does the **non-competing scan** instead of pure critical-path (see §"Non-competing scan (Parallel Developer)" below).
+- Runs alongside the Default Developer on a separate item; designed for coding throughput when the Default Dev is mid-loop and the user wants something else moving in parallel.
+
+**Honest constraint: user attention is single-threaded.** Both sessions can code in parallel, but the user-mediated QA loop serializes through the user — only one feature is in your hands at a time. Parallelism buys coding throughput, not end-to-end throughput.
+
+**The "check dev" handoff.** When Parallel Dev merges its W-item to `dev`, the user tells Default Dev: "Parallel just merged W-X to dev — pull it in." Default Dev runs `git fetch origin dev && git merge origin/dev` (or rebase) on its current feature branch, surfaces conflicts to the user, resolves in-loop. Standard git, nothing framework-special.
+
+N+1 Parallel Developers (a third or fourth session) are mechanically supported — each gets its own worktree, each does its own non-competing scan at boot — but get diminishing returns as the user-attention ceiling stays fixed.
+
 ## What it does
 
-- **Crawls the plan on bootstrap and proposes the critical-path next item.** Reads `plan.md`, reconciles state, and recommends what to work on next based on the Depends-on graph and current Status. Asks the user to confirm before any Status write. The post-rewind path uses the same crawl: an item at `code_review` → "let's do a blind self-review on this." An item at `in_progress` after a context reset → "want me to resume?" Otherwise: top `pending` item by critical path.
+- **Crawls the plan on bootstrap and proposes the next item.** Reads `plan.md`, reconciles state, and recommends what to work on next. The proposal step diverges by invocation pattern:
+  - **Default Developer** → top `pending` item by critical path (Depends-on graph).
+  - **Parallel Developer** → first `pending` item that doesn't compete with already-claimed items (see §"Non-competing scan").
+
+  The post-rewind path is the same in both: an item at `code_review` → "let's do a blind self-review on this." An item at `in_progress` after a context reset → "want me to resume?" Asks the user to confirm before any Status write.
 - **Codes one W-item at a time, in the user's loop.** Reads the W-item file for acceptance + Touches + References + Contingencies. Writes tests + code + commits on the W-item's branch. Operates the **80/20 confidence ladder** at every decision fork (see §"Confidence-driven escalation"): self ≥80% → act; self <80% → call advisor (or a research-flavored consultant subagent); advisor <80% → ask the user. Spawns subagents freely for narrow analysis (Doc Consultant, Code Consultant, one-shot edge-case investigation). What it does NOT spawn is a Reviewer / QA peer chain in place of the user-loop + rewound-self gates — those substitutions are what make Developer mode hands-on.
 - **Drives a user-mediated QA loop within `in_progress`.** The user is the QA gate. Developer writes code; user runs the feature; user reports what works and what doesn't; Developer fixes; user re-tests. State stays at `in_progress` throughout — no `qa` state, no automatic bounce. `in_progress` exits only when the user confirms the feature works.
 - **Produces a rewind summary at the `in_progress → code_review` flip.** A structured packet covering: feature scope (what was built), branch + diff anchors, acceptance criteria met, what to look at in the blind review, anything the post-rewind self should know that isn't in the W-item file. Written as a commit on the branch alongside the Status flip. Recommends the user rewind chat to the pre-coding anchor and paste the summary.
@@ -80,7 +108,21 @@ After reading `plan.md`, note the `**Mode:**` field in the Executive summary (if
 
 When the Developer claims a `pending` item (`pending → in_progress` flip), the item locks into Developer-mode lifecycle for the rest of its life — it goes through `code_review` to `done`. Other items on the same plan can be Orchestrator-driven in parallel. Per-item Status paths enforce collision-freedom; no plan-level lock is needed.
 
-**Record the claim in the plan's Notes section** atomically with the Status flip — `"W-A1 — claimed by Developer YYYY-MM-DD"`. This gives a fresh Orchestrator session opening the same plan unambiguous attribution for in-flight items even before the Status leaves `in_progress`.
+**Record the claim in the plan's Notes section** atomically with the Status flip — `"W-A1 — claimed by Developer YYYY-MM-DD"` (or `claimed by Parallel Developer` if invoked via the Parallel pattern). This gives a fresh Orchestrator or sibling Developer session opening the same plan unambiguous attribution for in-flight items even before the Status leaves `in_progress`.
+
+### Non-competing scan (Parallel Developer)
+
+The Parallel Developer's bootstrap scan diverges from the Default's "top critical-path" pick. Procedure:
+
+1. Read `plan.md`. Note all items at Status `in_progress` or `code_review` (claimed) and their Notes attribution.
+2. For each claimed item, read its W-item file: capture `Touches` and any `Parallel-safe considered` factors.
+3. For each `pending` item (in critical-path order): read its W-item file, then check for collision against every claimed item:
+   - **Direct overlap** on `Touches` (same files) → conflict, skip.
+   - **Shared runtime/build surface** that's not in `Touches` but matters — package.json / lockfile, schema, migrations, route registry, env/feature-flag registry, refactor of a callee, shared test fixtures, dev-server port. Same checklist the Strategist uses for `Parallel-safe: true` (see `execution-plans/README.md` §"Parallel-safe field"). If any apply → conflict, skip.
+   - **Depends-on chain** points at a `pending` or `in_progress` item not yet `done` → not eligible, skip.
+4. Propose the first non-conflicting `pending` item to the user. If none qualify, REPORT: "no non-competing items available; all `pending` items overlap with claimed work or are blocked on uncompleted dependencies."
+
+Concurrent claim safety is handled by PLAN-WRITE DISCIPLINE: read-fresh + commit + verify-pushed. If two Parallel Developers boot simultaneously and both want the same item, the first to push wins; the second's push fails non-fast-forward, it pulls, re-scans, picks something else.
 
 ## Mode coexistence (per item, not per phase)
 
@@ -106,8 +148,10 @@ pending → in_progress → code_review → done → shipped
 
 **Per-item flow:**
 
-1. **Bootstrap.** Read `plan.md`. Reconcile. Propose next item (or post-rewind blind-review on a `code_review` item). User confirms.
-2. **Anchor moment.** Before any code, the Developer asks the user something like "Ready to start coding W-X?" — the user notes this as the rewind anchor. Status flip `pending → in_progress` is atomic with branch creation + the anchor message in the same plan-write commit.
+1. **Bootstrap.** Read `plan.md`. Reconcile. Propose next item — top critical-path for Default; non-competing scan for Parallel (see §"Non-competing scan"). Or post-rewind blind-review on a `code_review` item. User confirms.
+2. **Anchor moment + branch/worktree creation.** Before any code, the Developer asks the user "Ready to start coding W-X?" — the user notes this as the rewind anchor. Status flip `pending → in_progress` is atomic with the anchor message + claim attribution in the plan's Notes section + branch (Default) or worktree+branch (Parallel) creation:
+   - **Default:** `git checkout -b w-<id>/<slug> origin/dev` in the current checkout. One PLAN-WRITE commit on `plan.md` covers the Status flip, Branch field populate, and Notes line.
+   - **Parallel:** `git worktree add -b w-<id>/<slug> /tmp/worktrees/<project>/w-<id>-<slug> origin/dev`, then `cd` into the worktree for the rest of the session. The plan-write commit covers the same fields; the worktree creation itself is a separate command (no .git tracked artifact). Push the plan-write commit before any code begins so other sessions see the claim.
 3. **Code + commits.** Developer writes tests, code, commits on the W-item's branch. Applies the 80/20 confidence ladder at decision forks (advisor → consultant subagent → user; see §"Confidence-driven escalation"). Spawns analysis subagents freely for narrow research questions. The standard Reviewer/QA peer chain (Orchestrator-mode) is replaced by the user-loop + rewound-self gates — user is the test driver throughout `in_progress`.
 4. **User QA loop (within `in_progress`).** User runs the feature; Developer fixes; loop until user confirms it works. State stays at `in_progress`. No bounce, no separate `qa` state.
 5. **Rewind summary + state flip.** When the user confirms, Developer drafts the rewind summary, commits it on the branch alongside the Status flip `in_progress → code_review` (one PLAN-WRITE commit). Recommends the user rewind chat to the anchor + paste the summary.
