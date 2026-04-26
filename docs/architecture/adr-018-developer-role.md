@@ -57,6 +57,18 @@ The original v1 rejection of "spawn Reviewer subagent" cited "loses project cont
 
 What survives from v1: the Developer is still a persistent role, still drives the user-mediated QA loop, still owns the W-item end-to-end via the persistent session, still writes the Implementation log at done. The lifecycle states are unchanged (`pending → in_progress → code_review → done → shipped`); only the mechanism behind `code_review` changes.
 
+#### Revision (v3.1): plan-writes on `dev`, no force-push of feature
+
+Field iteration after v3 landed surfaced two refinements to the sync + plan-write flow:
+
+1. **Plan-writes go on `dev`, not the feature branch.** Originally the `in_progress → code_review` Status flip was committed on the feature branch alongside the sync. This made the claim invisible from `origin/dev` — any concurrent plan-reader (a second Developer instance, an Orchestrator bootstrapping a mixed-mode phase, the Strategist auditing claims) could not see the in-flight `code_review` claim by reading the canonical plan, defeating PLAN-WRITE DISCIPLINE's visibility purpose. Resolution: **every Developer plan-write (claim flip, Status transitions, Notes lines) commits on `dev` and pushes to `origin/dev`**, matching the Orchestrator's plan-write pattern. Feature branches carry only code commits. Parallel Developer must `cd <main checkout path>` to do plan-writes (leaving the worktree); Default Developer is already there.
+
+2. **No force-push of `origin/<feature>` after rebase.** The rebased feature branch is local-only — the Reviewer reads from the local working directory (Default: main checkout; Parallel: worktree path) per the brief's "Where to read from" section, never fetching `origin/<feature>`. Pushing the rebased branch to `origin/<feature>` would buy nothing and would require force-push, conflicting with the framework's destructive-ops doctrine. The eventual merge to `dev` (Ship path) is a clean fast-forward locally; only `dev` is pushed.
+
+Side effects: the Implementation log lands on `dev` via the fast-forward Ship merge but post-dates the Reviewer pass — it is metadata about the just-shipped work, not part of what was reviewed. No rule break: the Reviewer brief does not audit the Implementation log section.
+
+These refinements were made during field testing of v3 against the framework's own development workflow. Lifecycle states and Reviewer outcomes are unchanged; only the commit topology of the sync + plan-write flow was tightened.
+
 ### State machine extension: `code_review`
 
 Add one new state — `code_review`. The full lifecycle for Developer-mode items:
