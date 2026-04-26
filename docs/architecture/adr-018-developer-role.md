@@ -20,20 +20,28 @@ The rewind mechanism is novel. It enables blind self-review without spawning a s
 
 Add a fourth product-side persistent role, **Developer**, that operates as a parallel mode to Orchestrator dispatch. The Developer is user-invoked, drives one W-item at a time conversationally, runs a user-mediated QA loop within `in_progress`, produces a rewind summary at done-of-coding, and post-rewind performs blind self-review on its own work using clean context.
 
-### Mode-exclusivity (per phase) — mechanism
+### Mode field is advisory, not binding (v2)
 
-The Developer and the Orchestrator both write Status to `plan.md`. Per-phase mode-exclusivity is the resolution: a phase runs end-to-end under one mode; switching mid-phase is heavy.
+The Developer and the Orchestrator both write Status to `plan.md`. The collision concern is per-W-item, not per-plan: an item can only run one mode's Status path (Orchestrator's `in_progress → done` or Developer's `in_progress → code_review → done`), and Status paths take different routes from `in_progress` so they cannot overlap.
 
-Mode is enforced via a **`Mode` field in the plan's Executive summary section on `plan.md`**, with allowed values `orchestrator` and `developer`. The Strategist sets `Mode` at plan draft. Both bootstraps read this field and **refuse-on-mismatch**:
+A `**Mode**` field in the plan's Executive summary records the Strategist's recommended execution style — `orchestrator`, `developer`, or absent for no recommendation. **The field is advisory.** Either mode can claim any `pending` item on any plan. The Strategist's recommendation is a hint, not a lock.
 
-- The Orchestrator's STEP 0 MODE CHECK (in `orchestrator-bootstrap.md`) reads `Mode`; if `developer`, REPORT and STOP without reconciling or dispatching.
-- The Developer's bootstrap (in `developer.md`) reads `Mode`; if not `developer` (including absent), REPORT and STOP without writing Status.
+Both bootstraps read the field on session start:
 
-This is the mechanism behind mode-exclusivity. A bare-English rule ("pick one mode per phase, by user convention") was rejected as drift bait per the framework-change doctrine — every "X always happens on Y" rule must ship with the command, hook, or check that enforces it. The Mode field is that check.
+- The Orchestrator's STEP 0 MODE AWARENESS (in `orchestrator-bootstrap.md`) reads `Mode`. If `developer` (explicit), it **prompts the user** to confirm proceeding in Orchestrator mode anyway. If `orchestrator` or absent, proceeds normally.
+- The Developer's bootstrap (in `developer.md`) reads `Mode`. If `orchestrator` (explicit), prompts the user to confirm proceeding in Developer mode anyway. If `developer` or absent, proceeds normally.
 
-Pre-ADR-018 plans lack the field; both bootstraps interpret absent `Mode` as `orchestrator` for back-compat with plans drafted before the Developer role existed. Strategists migrating a phase to Developer mode set the field explicitly at draft.
+Items lock into a mode at claim time via the Status path they take. Per-W-item collision is naturally enforced; no plan-level lock is needed. **Mixed-mode phases are allowed** — a single plan can have some items running under Orchestrator dispatch and others running under Developer mode in parallel. The cost is historical asymmetry (early items have no Implementation log; later items do), which is tolerable.
 
-A **per-W-item** `Mode` field (mid-phase mode mixing) remains rejected for v1 — adds machinery for a problem not yet observed. The per-plan field addresses real usage; the per-W-item extension is a future option if usage shows demand.
+Claim attribution lives in the plan's Notes section (`"W-A1 — claimed by Developer YYYY-MM-DD"`), written atomically with the `pending → in_progress` flip. This gives a fresh session unambiguous attribution for in-flight items even before Status leaves `in_progress`.
+
+#### Revision (v2)
+
+ADR-018 originally specified per-phase mode-exclusivity enforced via the Mode field with refuse-on-mismatch. Field testing showed this was over-strict — it locked the Developer out of plans the Strategist had drafted with Orchestrator in mind, even when no W-item had been claimed and no collision was possible. The doctrine "rule + mechanism in the same PR" was satisfied, but the rule itself was wrong.
+
+The correct read: per-W-item Status paths are the natural collision boundary. Per-plan exclusivity adds friction without reducing collision risk. v2 (current) walks back to: Mode field as advisory recommendation, prompt-on-explicit-mismatch instead of refuse, mixed-mode phases allowed, claim attribution in Notes for at-a-glance ownership.
+
+A **per-W-item** `Mode` override field is also rejected — once items lock into a mode at claim time via Status path, the override field would be redundant. The Notes-line attribution + Status-path inference covers what a per-item Mode field would cover.
 
 ### State machine extension: `code_review`
 
@@ -98,7 +106,7 @@ Per the framework-change doctrine: adding a role updates five surfaces in one PR
 
 Plus the spec/doc updates:
 
-6. `docs/execution-plans/README.md` — `code_review` state, transitions, Developer as Status writer, Implementation log section template, mode-exclusivity note.
+6. `docs/execution-plans/README.md` — `code_review` state, transitions, Developer as Status writer, Implementation log section template, Mode field as advisory recommendation, §"Mode signaling (per item, not per phase)" with the v1→v2 walk-back rationale.
 7. `docs/dev_framework/session-policy.md` §"Status ledger" — Developer as fourth writer.
 
 ## Consequences
@@ -113,10 +121,10 @@ Plus the spec/doc updates:
 **What this costs:**
 
 - **Fourth Status writer.** PLAN-WRITE DISCIPLINE now applies at four agent-types' write sites instead of three. Each must hold the discipline. Drift risk extends.
-- **Two parallel modes for the same kind of work (coding).** Newcomers to the framework have to learn both. Mitigated by per-plan Mode field + refuse-on-mismatch — a session that loads the wrong-mode plan stops cleanly with a user-facing message, rather than silently corrupting state.
+- **Two parallel modes for the same kind of work (coding).** Newcomers to the framework have to learn both. Mitigated by per-plan Mode field as the Strategist's recommendation + prompt-on-explicit-mismatch in both bootstraps. Per-W-item collision is naturally prevented by mode-specific Status paths.
 - **Rewind harness-coupling.** The role's signature behavior depends on a Claude Code affordance. Adopters on other harnesses get a degraded role with the Reviewer-subagent fallback documented in `dev_framework_exceptions.md`.
 - **W-item file template grows.** Fourth section (Implementation log) on the SOW file — unused in Orchestrator mode (or used optionally), populated in Developer mode. Adopters reading the template see a section that may not apply to their mode.
-- **One more field on `plan.md`.** Mode adds a single line in the Executive summary. Cheap, but real — Strategists must remember to set it explicitly when drafting Developer-mode plans (default is `orchestrator` via absent-field back-compat).
+- **One more field on `plan.md`.** Mode adds a single line in the Executive summary. Cheap, advisory — Strategists set it explicitly when they have a recommendation; absent means no recommendation expressed (no penalty in v2).
 
 **What this does NOT do:**
 
@@ -128,7 +136,9 @@ Plus the spec/doc updates:
 ## Alternatives considered
 
 1. **Developer as Orchestrator-dispatched Executor variant.** Rejected — subagents are stateless invocations; there is no chat to rewind, no paste interaction, no continued session post-rewind. The rewind ritual cannot be implemented in a subagent.
-2. **Per-W-item `Mode` field on plan.md.** Rejected for v1 — adds machinery for a problem not yet observed (mid-phase mode mixing). The accepted mechanism is a **per-plan** Mode field (one row in the Executive summary, refuse-on-mismatch in both bootstraps); a per-W-item Mode field would require dispatch-time routing logic and a W-item template change. Per-plan addresses the actual usage; per-W-item is a future option.
+2. **Per-W-item `Mode` field on plan.md.** Rejected — once items lock into a mode at claim time via Status path (Developer's `in_progress → code_review → done` versus Orchestrator's `in_progress → done`), an explicit per-item field would be redundant. Notes-section claim attribution (`"W-A1 — claimed by Developer YYYY-MM-DD"`) covers at-a-glance ownership for in-flight items.
+
+   **Per-plan binding Mode field with refuse-on-mismatch (original ADR-018 v1, walked back in v2).** Initially specified as the mechanism behind per-phase mode-exclusivity. Walked back after field testing showed it locked the Developer out of Strategist-drafted Orchestrator plans even when no W-item had been claimed. The actual collision boundary is per-W-item (enforced by Status paths), not per-plan. v2 reframes Mode as advisory with prompt-on-explicit-mismatch instead of refuse.
 3. **Self-blind QA via spawning a Reviewer subagent.** Rejected — Reviewer subagent is ephemeral and stateless; loses the project context that makes Developer-mode work coherent. The novel value of the rewind mechanism is "same session, different context" — Reviewer subagent gives "different session, no context."
 4. **Add a `qa` state.** Rejected — the user is the QA gate in real-time. State doesn't bounce between `qa` and `in_progress`; `in_progress` covers the whole loop until user confirmation. A separate `qa` state would never be observed long enough to matter.
 5. **Universal Implementation log (all modes).** Deferred — Developer-mode-specific in v1 because that's where chat-rewind makes a persistent journey record load-bearing. Easy to extend if Orchestrator-mode usage shows benefit.
@@ -145,7 +155,7 @@ Plus the spec/doc updates:
   - State machine adds `code_review`.
   - Transition table adds the Developer-owned transitions.
   - W-item file template adds the Implementation log section.
-  - **Mode field** documented in the Executive summary spec, with allowed values, refuse-on-mismatch semantics, and absent-defaults-to-`orchestrator` back-compat.
+  - **Mode field** documented in the Executive summary spec as the Strategist's advisory recommendation (allowed values `orchestrator` / `developer` / absent; prompt-on-explicit-mismatch in both bootstraps; mixed-mode phases allowed).
   - Status state count updates to **seven** (`pending`, `in_progress`, `code_review`, `held`, `blocked`, `done`, `shipped`).
   - Claim-filer set expanded (Integrator-QA OR Developer) in §"Integration claims" + Filed-by template.
 - `docs/dev_framework/session-policy.md` §"Status ledger" lists Developer as a fourth writer with the transition set.

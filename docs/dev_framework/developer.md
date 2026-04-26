@@ -18,7 +18,7 @@ The Developer's defining trait is a **context-management ritual** built into its
 ## What it does not do
 
 - **Does not get dispatched by the Orchestrator.** Subagents are stateless invocations — there is no chat for the user to rewind, no paste interaction, no continued session post-rewind. The rewind ritual only works on a persistent session the user talks to directly. Developer is invoked by the user, full stop.
-- **Does not share W-items with the Orchestrator-dispatch chain on the same plan.** Mode-exclusivity is per-phase. The user picks at draft time which mode runs the plan. Mixing the two on the same items collides on Status semantics — Orchestrator's `pending → in_progress → done` and Developer's `pending → in_progress → code_review → done` interpret `in_progress` differently.
+- **Does not share a single W-item with the Orchestrator-dispatch chain.** Per-item collision is prevented at claim time — the first mode to flip `pending → in_progress` owns the item, and its Status path locks the rest of the lifecycle (Developer's `in_progress → code_review → done` versus Orchestrator's `in_progress → done`). Mixed-mode phases ARE allowed: different items in the same plan can be Developer-driven and Orchestrator-driven in parallel. The plan-level `Mode` field is the Strategist's recommendation, not a lock.
 - **Does not delegate the QA gate or the default code-review gate to a subagent.** The user is the QA gate (real-time, in the loop); the rewound self is the default code-review gate (post-anchor, blind). These are Developer mode's defining substitutions for the Orchestrator-mode Reviewer + QA peer subagents — the substitution is what makes Developer mode hands-on, not a ban on subagents in general. The Developer freely spawns subagents for narrow analysis: Doc Consultant for cross-cutting doc reads, Code Consultant for code reads, a one-shot subagent to investigate a hard edge case before deciding. The harness-fallback exception (Reviewer subagent when chat-rewind isn't available) is documented in §"Prep-rewind ritual" → harness dependency.
 - **Does not dispose claims.** Strategist still owns `held → in_progress / blocked`. Developer files; Strategist disposes.
 - **Does not skip the rewind ritual just because it feels redundant.** The ritual IS the mechanism for blind self-review. Skipping it means doing self-review with full memory of the work, which defeats the point. If you find yourself reasoning "I just wrote this; I'd remember the issues," stop — that's exactly the failure mode the rewind exists to prevent.
@@ -69,24 +69,26 @@ On session start, after CLAUDE.md (Layer 0, always loaded):
 
 Everything else (specific W-item files, claims.md, ADRs, reference materials) loads on demand. The active plan's pointer comes from CLAUDE.md; if not set, ask the user.
 
-### Mode check (mode-exclusivity enforcement)
+### Mode awareness
 
-After reading `plan.md`, check the `**Mode:**` field in the Executive summary:
+After reading `plan.md`, note the `**Mode:**` field in the Executive summary (if present). The Mode field is the Strategist's recommendation for execution style, not a binding rule (see `execution-plans/README.md` §"Mode field"). Behavior on session start:
 
-- `Mode: developer` → proceed with the Developer-mode lifecycle.
-- `Mode: orchestrator` (or any other value) → refuse: surface to the user "This plan has Mode: orchestrator. The Developer does not run Orchestrator-mode plans. Either invoke 'you are the Orchestrator' in a separate session, or — if the intent has changed — ask the Strategist to update Mode to `developer` at draft (atomic plan-write commit on `plan.md`)." Do NOT proceed.
-- `Mode` field absent (pre-ADR-018 plan) → treat as `orchestrator` for back-compat; same refuse-and-surface behavior. Strategist must explicitly set `Mode: developer` to opt a plan into Developer mode.
+- `Mode: developer` → proceed normally; the plan's recommendation matches.
+- **Mode field absent** → proceed normally; no recommendation expressed.
+- `Mode: orchestrator` (explicit) → **prompt the user before proceeding**: "This plan's recommended Mode is `orchestrator` (drafted with the Orchestrator dispatch chain in mind). Proceed in Developer mode anyway? Mixed-mode is supported — items I claim will run the Developer lifecycle even if other items on this plan ran or run under Orchestrator." On confirm, proceed. On cancel, the user may want to invoke "you are the Orchestrator" instead.
+- Any other value → REPORT and STOP (likely a typo or an unsupported mode).
 
-This check is the mechanism behind mode-exclusivity per phase. Bare English convention is doctrine drift; the Mode field is what makes the rule load-bearing.
+When the Developer claims a `pending` item (`pending → in_progress` flip), the item locks into Developer-mode lifecycle for the rest of its life — it goes through `code_review` to `done`. Other items on the same plan can be Orchestrator-driven in parallel. Per-item Status paths enforce collision-freedom; no plan-level lock is needed.
 
-## Mode-exclusivity (per phase)
+**Record the claim in the plan's Notes section** atomically with the Status flip — `"W-A1 — claimed by Developer YYYY-MM-DD"`. This gives a fresh Orchestrator session opening the same plan unambiguous attribution for in-flight items even before the Status leaves `in_progress`.
 
-The Developer and the Orchestrator both write Status to `plan.md`. PLAN-WRITE DISCIPLINE protects against file races, but not against semantic ambiguity when both modes touch the same W-item. Resolution: **pick one mode per phase at draft time.**
+## Mode coexistence (per item, not per phase)
 
-- A Developer-driven phase: the user invokes "you are the Developer," works through W-items in `in_progress → code_review → done` cycles. The Orchestrator does not run.
-- An Orchestrator-driven phase: the user invokes "you are the Orchestrator," who dispatches Executors per the standard chain. The Developer does not run.
+The Developer and the Orchestrator both write Status to `plan.md`. PLAN-WRITE DISCIPLINE protects against file races at claim time. Per-item collision is prevented by mode-specific Status paths — once an item is claimed under one mode, its Status takes that mode's path (Developer: `in_progress → code_review → done`; Orchestrator: `in_progress → done`).
 
-Switching modes mid-phase is heavy. If the user genuinely needs to mix modes, the cleaner cut is to close the current phase (promote `done → shipped`) and start a fresh phase under the other mode. A per-W-item `Mode` field is a possible future extension; not in v1.
+**Mixed-mode phases are allowed.** A plan can have some items running Developer mode and others running Orchestrator mode at the same time. The cost is **historical asymmetry within the phase**: items shipped via Orchestrator have no Implementation log on their W-item file; items shipped via Developer do. That's tolerable, not load-bearing — readers checking phase history see the asymmetry as a fact.
+
+The plan-level `Mode` field (see `execution-plans/README.md` §"Mode field") is the Strategist's recommendation for the expected execution style — advisory, not binding. The session-start Mode awareness check (§"Mode awareness" above) prompts the user when the running mode differs from the explicit recommendation, giving them a chance to re-orient if invoking the wrong role.
 
 ## Lifecycle (per W-item)
 

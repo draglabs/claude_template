@@ -101,16 +101,21 @@ The first two sections orient any agent or human opening the plan: what is this 
 
 The Strategist writes these at plan-draft time. They are not runtime ledger fields — phase pivots may revise them; routine W-item progress does not.
 
-#### Mode field (mode-exclusivity mechanism)
+#### Mode field (Strategist recommendation, advisory not binding)
 
-`Mode` determines which dispatch flow runs the plan. Allowed values:
+`Mode` is the Strategist's recommended execution style for the plan. Allowed values:
 
-- **`orchestrator`** — default. ADR-013 sequential or ADR-016 batch dispatch through Executor / Reviewer / QA peer subagents.
-- **`developer`** — ADR-018 hands-on, user-invoked Developer with rewind ritual + blind self-review.
+- **`orchestrator`** — drafted with Orchestrator dispatch in mind (ADR-013 sequential or ADR-016 batch via Executor / Reviewer / QA peer subagents).
+- **`developer`** — drafted with Developer mode in mind (ADR-018 hands-on, user-invoked, rewind ritual + blind self-review).
+- **absent** — no recommendation expressed.
 
-The Strategist sets `Mode` at plan draft. Both the Orchestrator's STEP 0 PRELUDE and the Developer's bootstrap read this field and **refuse to act on a plan that doesn't match their mode** — this is the mechanism behind mode-exclusivity per phase ([ADR-018](../architecture/adr-018-developer-role.md)). Mismatches surface to the user; no auto-resolution.
+**The field is advisory** ([ADR-018](../architecture/adr-018-developer-role.md) §"Mode field is advisory"). Either mode can claim any `pending` item on any plan. The Strategist's recommendation is a hint about expected execution style, not a lock — items lock into a mode at claim time via the Status path they take (Orchestrator-mode items go `in_progress → done`; Developer-mode items go `in_progress → code_review → done`). Per-item collision is naturally enforced by the mode-specific Status paths; per-plan collision was over-broad enforcement.
 
-Pre-ADR-018 plans lack this field; both bootstraps interpret absent `Mode` as `orchestrator` for back-compat. Strategists migrating a phase to Developer mode set the field explicitly at draft.
+When a session is invoked against a plan whose explicit `Mode` recommendation differs from the session's role — e.g., Developer invoked against `Mode: orchestrator` — the bootstrap **prompts the user to confirm**: "this plan's recommended Mode is X; proceed in Y mode anyway?" Confirm → proceed. Cancel → user may want to re-invoke the recommended role. Absent `Mode` is treated as no recommendation, and the session proceeds without prompt.
+
+Mixed-mode phases are allowed. Some items can be Orchestrator-driven, others Developer-driven, in the same plan. The cost is **historical asymmetry within the phase** — early items shipped via Orchestrator have no Implementation log; later items shipped via Developer do. That's tolerable, not load-bearing.
+
+When claiming an item, record the claim in the plan's Notes section — `"W-A1 — claimed by Developer YYYY-MM-DD"` — so a fresh session opening the plan has unambiguous attribution for in-flight items even before any Status flip beyond `in_progress`.
 
 ### Summary table
 
@@ -256,7 +261,7 @@ The state machine has two mode-specific lifecycles. Orchestrator mode (ADR-013 s
 - **Orchestrator mode** runs `in_progress → done` — Reviewer + QA gates run as peer subagents.
 - **Developer mode** runs `in_progress → code_review → done` — user mediates QA inside `in_progress` (no separate `qa` state); rewind ritual + blind self-review covers the `code_review` step.
 
-A given W-item runs through one mode's lifecycle at a time, by per-phase mode-exclusivity (see §"Mode-exclusivity" below).
+A given W-item runs through one mode's lifecycle at a time. The plan-level `Mode` field is the Strategist's recommendation (advisory) — collision-freedom is enforced per W-item by the mode-specific Status paths (see §"Mode signaling" below).
 
 ### Orchestrator-mode lifecycle
 
@@ -325,13 +330,13 @@ A given W-item runs through one mode's lifecycle at a time, by per-phase mode-ex
 
 Anchor moment: the Developer asks the user "ready to start coding W-X?" before the `pending → in_progress` flip. The user notes this as the chat-rewind anchor — at the `in_progress → code_review` flip, the Developer recommends rewinding chat to this point and pasting the rewind summary, putting the Developer's session into clean context for the blind self-review.
 
-### Mode-exclusivity (per phase)
+### Mode signaling (per item, not per phase)
 
-Orchestrator mode and Developer mode both write Status to `plan.md`. PLAN-WRITE DISCIPLINE protects against file races, but not against semantic ambiguity if both modes touch the same W-item — Orchestrator's `pending → in_progress → done` and Developer's `pending → in_progress → code_review → done` interpret `in_progress` differently.
+ADR-018 originally proposed per-phase mode-exclusivity (the user picks at draft; both bootstraps refuse-on-mismatch). That rule was over-strict — it locked Developer out of plans the Strategist had drafted with Orchestrator in mind, even when no W-item had been claimed. The actual collision risk is per-W-item, not per-plan, and is naturally enforced by mode-specific Status transitions: Orchestrator's `in_progress → done` and Developer's `in_progress → code_review → done` take different paths from `in_progress` and don't conflict.
 
-Resolution: **one mode per phase, picked at draft time.** A phase runs end-to-end under either Orchestrator dispatch or Developer mode; do not mix on the same plan. Switching modes mid-phase is heavy — close the phase (`done → shipped`) and start a fresh one under the other mode.
+Under the v2 model (current): the plan-level `Mode` field is the Strategist's recommendation (see §"Mode field" above). Either mode can claim any `pending` item. Items lock into a mode at claim time via the Status path they take. Cross-mode collision on a single in-flight item is prevented by PLAN-WRITE DISCIPLINE (read-fresh + commit) at claim time and by the mode-specific Status paths thereafter.
 
-A per-W-item `Mode` field is a possible future extension if usage shows mid-phase mixing is needed. Not in v1 (ADR-018).
+**A per-W-item `Mode` override field is not needed.** Once items lock into a mode at claim time via Status path, an explicit per-item field would be redundant. Claim attribution lives in the plan's Notes section (`"W-A1 — claimed by Developer YYYY-MM-DD"`) for at-a-glance disambiguation of in-flight items.
 
 ### Transition table
 

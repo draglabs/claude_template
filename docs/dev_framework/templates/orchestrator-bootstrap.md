@@ -65,17 +65,18 @@ promotion).
   atomically with filing an IC-NNN claim (touches plan.md AND claims.md
   in one commit). The Strategist writes `held → in_progress`
   (approve/modify) and `held → blocked` (reject) atomically with claim
-  disposition. The Developer (ADR-018, Developer-mode phases only) writes
-  the full Developer-mode lifecycle including `in_progress → code_review`
-  and `code_review → done`. PLAN-WRITE DISCIPLINE applies at all four
-  write sites; each agent's brief / role doc inlines it. Your job: do
-  NOT flip Status for items the Integrator-QA already flipped to `held`
-  (STEP 3B.5 partial), do NOT touch claims.md yourself (that's the
-  Integrator's and Strategist's surface), and do NOT dispatch into a
-  Developer-mode phase — STEP 0 MODE CHECK below catches this upfront
-  via the **Mode** field on `plan.md`. If a `code_review` Status leaks
-  through (e.g., a partially-converted plan), surface to the user before
-  doing anything: it indicates Developer-mode work, which you do not own.
+  disposition. The Developer (ADR-018) writes the Developer-mode
+  lifecycle including `in_progress → code_review` and
+  `code_review → done` for items it has claimed. PLAN-WRITE DISCIPLINE
+  applies at all four write sites; each agent's brief / role doc
+  inlines it. Your job: do NOT flip Status for items the Integrator-QA
+  already flipped to `held` (STEP 3B.5 partial), do NOT touch claims.md
+  yourself (that's the Integrator's and Strategist's surface), and do
+  NOT touch items the Developer has claimed (check the Notes section
+  for `claimed by Developer` lines and any item at `code_review` —
+  those are Developer-owned). Mixed-mode phases are allowed under v2
+  (see STEP 0 MODE AWARENESS below); per-item ownership is the
+  collision boundary, not per-plan exclusivity.
 
 STEP 0 — Detect plan format, then reconcile the status ledger.
 
@@ -103,33 +104,38 @@ STEP 0 — Detect plan format, then reconcile the status ledger.
     references to "the plan" / "<active-plan>" resolve via PLAN_PATH;
     references to claims resolve via CLAIMS_PATH.
 
-  STEP 0 MODE CHECK — Refuse Developer-mode plans (ADR-018).
+  STEP 0 MODE AWARENESS — Note Mode recommendation, prompt on contradiction.
 
     Read the **Mode** field from the plan's Executive summary section
     on $PLAN_PATH:
 
       MODE=$(grep '^\*\*Mode:\*\*' $PLAN_PATH | head -1 \
              | sed 's/.*Mode:\*\* *//; s/ *$//')
-      # Default to 'orchestrator' for pre-ADR-018 plans where the
-      # field is absent — back-compat with all plans drafted before
-      # the Developer role existed.
-      MODE=${MODE:-orchestrator}
 
-      if [ "$MODE" = "developer" ]; then
-        REPORT to user: "Plan $PLAN_PATH has Mode: developer (ADR-018).
-        The Orchestrator does not run Developer-mode plans —
-        mode-exclusivity per phase. Either invoke 'you are the
-        Developer' in a separate session, or — if intent has changed
-        — ask the Strategist to update the plan's Mode to
-        `orchestrator` (atomic plan-write commit on plan.md)."
-        STOP — do not reconcile, do not dispatch.
-      fi
+    Behavior (Mode is the Strategist's recommendation, advisory not
+    binding — see docs/execution-plans/README.md §"Mode field"):
+      - MODE = "orchestrator" or absent → proceed normally.
+      - MODE = "developer" → PROMPT the user before proceeding:
+        "Plan $PLAN_PATH has Mode: developer (drafted with the
+        Developer role in mind). Proceed in Orchestrator mode anyway?
+        Mixed-mode phases are supported — items I dispatch will run
+        the Orchestrator → Executor → Reviewer → QA chain even if
+        other items on this plan ran or run under Developer."
+        On confirm, proceed. On cancel, the user may want to re-invoke
+        as Developer.
+      - MODE = anything else → REPORT and STOP (likely a typo).
 
-    Mode = `orchestrator` (or absent for back-compat) is the only
-    case where you proceed. The Developer's bootstrap enforces the
-    symmetric refusal on `Mode: orchestrator`. Mode is the mechanism
-    behind mode-exclusivity per phase; bare-English convention would
-    be drift bait.
+    Either mode can claim any `pending` item on any plan. Per-item
+    collision is naturally enforced by the mode-specific Status paths
+    (Orchestrator items go in_progress → done; Developer items go
+    in_progress → code_review → done) — items lock into a mode at
+    claim time via the path they take.
+
+    When you claim an item (`pending → in_progress` flip), record
+    the claim atomically in the plan's Notes section:
+    `"W-X1 — claimed by Orchestrator YYYY-MM-DD"`. This gives Developer
+    sessions opening the same plan unambiguous attribution for in-flight
+    items even before Status leaves `in_progress`.
 
   The plan is a ledger — every W-item has a Status field (pending /
   in_progress / held / blocked / done / shipped). A previous Orchestrator
