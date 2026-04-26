@@ -122,6 +122,21 @@ for f in dev_framework_exceptions.md process-exceptions.md execution-incidents.m
 done
 
 # ---------------------------------------------------------------------------
+# 5b. Seed .mcp.json from stub if adopter doesn't have one.
+#     Idempotent: never overwrites an existing .mcp.json — adopters who
+#     have customized their MCP config (e.g., absolute Node paths for nvm,
+#     extra servers, removed servers) keep their version.
+# ---------------------------------------------------------------------------
+
+MCP_STUB="$TEMPLATE_ROOT/docs/dev_framework/_stubs/.mcp.json"
+LOCAL_MCP="$PROJECT_DIR/.mcp.json"
+
+if [[ -f "$MCP_STUB" && ! -f "$LOCAL_MCP" ]]; then
+  cp "$MCP_STUB" "$LOCAL_MCP" && \
+    echo "[sync-framework] seeded .mcp.json from stub (gitnexus + docker). Run 'gitnexus index .' once to build the code graph for this repo. See docs/dev_framework/approved-mcps.md."
+fi
+
+# ---------------------------------------------------------------------------
 # 6. CLAUDE.md managed-block reconciliation.
 #    The template's CLAUDE.md wraps framework-owned sections in:
 #      <!-- BEGIN FRAMEWORK MANAGED -->

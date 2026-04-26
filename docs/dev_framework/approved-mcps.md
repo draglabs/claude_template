@@ -15,14 +15,38 @@ These are project-scoped and expected by every session on this repo.
 
 ### gitnexus
 
-**Server:** `gitnexus@latest mcp` (via `npx -y`).
+**Server:** `gitnexus mcp` (npm package `gitnexus`, requires **Node ≥ 20**).
 **Purpose:** code-intelligence knowledge graph over the indexed repo. Replaces most Code Consultant subagent spawns.
 **Who uses it:**
 - **Strategist (primary):** `list_repos`, `query`, `context`, `impact`, `detect_changes`, `cypher` for factual code questions without loading `src/`. See [`strategist.md`](strategist.md) §"Staying code-aware without loading code."
 - **Orchestrator (occasional):** `impact` before dispatching a W-item to sanity-check that the plan's "Touches" list actually matches the blast radius. Lightweight — one call, short answer, no source loaded.
+- **Developer (mid-coding):** `context` on a symbol before modifying; `impact` before committing to confirm blast radius. Replaces some advisor calls in the 80/20 ladder for code-cross-cutting questions.
 - **Executor (authoring aid):** `context` on a symbol you're about to modify; `impact` before committing to confirm you understand what your change touches.
 - **Reviewer (audit):** `impact` to check whether the diff touched things outside the brief's scope — stronger signal than the Executor's self-reported "Scope creep" field.
-**Setup:** `gitnexus index <repo-path>` once per repo to build the graph. Registry at `~/.gitnexus/registry.json` is machine-scoped.
+
+**Adopter setup (first time per repo):**
+
+1. **Confirm Node ≥ 20.** Check with `node --version`. GitNexus's `cmake-js` dependency requires `^20.17.0 || >=22.9.0`.
+2. **Verify `.mcp.json` references gitnexus.** New adopters get `.mcp.json` seeded automatically by `sync-framework.sh` from `_stubs/.mcp.json` if no `.mcp.json` exists. Existing adopters retain their config — `sync-framework.sh` never overwrites an existing `.mcp.json`.
+3. **Build the graph for this repo:** `gitnexus index .` (run once at the repo root). Subsequent runs incrementally update.
+4. **Restart Claude Code.** MCP servers boot at session start; a running session won't pick up a new `.mcp.json` without restart.
+5. **Verify connection:** `claude mcp list` should show `gitnexus: ✓ Connected`.
+
+**nvm workaround.** If your default shell `node` is Node 18 (or anything < 20) but you have a newer Node installed via nvm, the vanilla `npx -y gitnexus@latest mcp` invocation will use the wrong Node and fail. Two fixes:
+
+- **Direct binary path** (preferred when gitnexus is installed globally with the right Node): edit `.mcp.json` to point at the absolute path:
+  ```json
+  "gitnexus": {
+    "command": "/Users/<you>/.nvm/versions/node/v24.4.1/bin/gitnexus",
+    "args": ["mcp"]
+  }
+  ```
+  Install gitnexus globally first under the right Node: `nvm use 24 && npm install -g gitnexus`.
+
+- **Wrapper script** (more portable, less brittle to Node version bumps): a small shell script that sources nvm and execs the right Node, referenced from `.mcp.json` via relative path. See `_stubs/.mcp.json` for the default invocation; adapt to your setup.
+
+**Registry** at `~/.gitnexus/registry.json` is machine-scoped (per-user, not per-project). If `~/.gitnexus/` doesn't exist, GitNexus won't return data even if the MCP connects — run `gitnexus index .` to populate.
+
 **Hooks note:** GitNexus offers PreToolUse/PostToolUse hooks that auto-enrich grep/glob/bash and auto-reindex after commits. These are NOT enabled by default on this project. If you want them, add them to `.claude/settings.json` per-role — the Orchestrator's context discipline is harmed by auto-enrichment, so scope hooks to Executor/Strategist sessions only.
 
 ## User-level MCPs (configured in `~/.claude.json`)

@@ -5,8 +5,8 @@
       "args": ["-y", "mcp-docker-server"]
     },
     "gitnexus": {
-      "command": "/Users/david/.nvm/versions/node/v24.4.1/bin/gitnexus",
-      "args": ["mcp"]
+      "command": "npx",
+      "args": ["-y", "gitnexus@latest", "mcp"]
     }
   }
 }
