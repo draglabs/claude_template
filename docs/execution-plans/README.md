@@ -304,20 +304,25 @@ A given W-item runs through one mode's lifecycle at a time. The plan-level `Mode
    pending ──▶ in_progress ──▶ code_review ──▶ done ──▶ shipped
                   │     ▲          │    ▲                  ▲
                   │     │          │    │                  │
-                  │     │          │    │ Reviewer-block,  │ phase exit
-                  │     │          │    │ user re-engages  │ + user authorize
-                  │     │          │    │                  │ + Developer promotes
+                  │     │          │    │ Reviewer block,  │ phase exit
+                  │     │          │    │ user chooses     │ + user authorize
+                  │     │          │    │ Resolve          │ + Developer promotes
                   │     │          │    │
-                  │     │          │    └────── (manual; not auto-loop)
+                  │     │          │    └── (manual; not auto-loop;
+                  │     │          │        Postpone bypasses this and
+                  │     │          │        proceeds to done with concerns
+                  │     │          │        logged)
                   │     │          │
-                  │     │          │ Reviewer-subagent ship verdict
-                  │     │          │ + merge to dev
-                  │     │          │ + Implementation log on W-item file
+                  │     │          │ Reviewer Ship verdict (or Postpone) →
+                  │     │          │   merge feature → dev (fast-forward)
+                  │     │          │   + Implementation log on W-item file
+                  │     │          │   + cleanup (worktree + branches)
                   │     │          ▼
                   │     │       (continue to done)
                   │     │
-                  │     │ user confirms feature works → /compact (recommended) +
-                  │     │ "ready for review" commit + spawn Reviewer subagent
+                  │     │ user confirms feature works → /compact (recommended)
+                  │     │ + "ready for review" commit + sync feature with
+                  │     │ origin/dev (rebase) + spawn Reviewer subagent
                   │     │
                   │     └──── user mediates QA loop inside in_progress
                   │            (Developer codes, user tests, iterate)
@@ -328,7 +333,7 @@ A given W-item runs through one mode's lifecycle at a time. The plan-level `Mode
                   └─▶ blocked (unblockable; user can't move it forward)
 ```
 
-Confirm + claim: the Developer asks the user "ready to start coding W-X?" before the `pending → in_progress` flip. At the `in_progress → code_review` flip (after user-mediated QA confirms the feature works), the Developer optionally runs `/compact` to compress its session context, commits a "ready for review" marker on the branch, and spawns a Reviewer subagent on the diff. The Reviewer's verdict drives `code_review → done` (ship + merge + Implementation log) or `code_review → in_progress` (block + user-mediated re-engagement).
+Confirm + claim: the Developer asks "ready to start coding W-X?" before the `pending → in_progress` flip. At the `in_progress → code_review` flip (after user-mediated QA confirms the feature works), the Developer optionally `/compact`s, commits a "ready for review" marker, **rebases the feature on `origin/dev`** (so the Reviewer reads accurate context and the eventual merge is a fast-forward), and spawns a Reviewer subagent. The verdict drives one of three outcomes — Ship, Resolve, or Postpone — described in §"`code_review` semantics" below.
 
 ### Mode signaling (per item, not per phase)
 
@@ -347,9 +352,9 @@ PLAN-WRITE DISCIPLINE applies to every transition: the writing agent reads the i
 | `pending` → `in_progress` | Orch | Orchestrator about to spawn Executor | Orchestrator | Dispatch event (Status flip + Branch populate; commit before spawning) |
 | `pending` → `in_progress` | Dev | Developer claims item after user confirms "ready to start coding" | Developer | Branch creation + anchor message; one plan-write commit |
 | `in_progress` → `done` | Orch | Executor pass + Orchestrator merges feature → `dev` | Orchestrator | The merge commit |
-| `in_progress` → `code_review` | Dev | User confirms feature works; Developer optionally `/compact`s, commits a "ready for review" marker, spawns Reviewer subagent | Developer | "Ready for review" commit on the W-item branch + Status flip in one PLAN-WRITE commit |
-| `code_review` → `done` | Dev | Reviewer subagent returns ship verdict; merge to `dev` | Developer | Merge commit + Implementation log on W-item file |
-| `code_review` → `in_progress` | Dev | Reviewer returns block + concerns; user re-engages on the disposition | Developer | Re-dispatch (user-mediated, NOT auto-loop) |
+| `in_progress` → `code_review` | Dev | User confirms feature works; Developer optionally `/compact`s, commits a "ready for review" marker, syncs feature with origin/dev (rebase), spawns Reviewer subagent on the synced state | Developer | "Ready for review" commit on the W-item branch + Status flip in one PLAN-WRITE commit. Sync + Reviewer spawn follow as separate operations |
+| `code_review` → `done` | Dev | Reviewer ship verdict (or Postpone with logged concerns); merge feature → `dev` (fast-forward, since pre-review sync rebased onto dev's tip) | Developer | Merge commit + Implementation log on W-item file (with `**Postponed concerns:**` line if Postpone) |
+| `code_review` → `in_progress` | Dev | Reviewer block + concerns; user chooses Resolve | Developer | Re-dispatch (user-mediated, NOT auto-loop). Re-sync + re-spawn Reviewer after re-confirming via user QA loop |
 | `in_progress` → `blocked` | Orch | Executor stumped, or Integrator-QA integration failure (confidence <80%) | Orchestrator | Stumped notice (Status flip + index Notes line) |
 | `in_progress` → `blocked` | Dev | Unblockable issue; user can't move work forward | Developer | Stumped notice (Status flip + index Notes line) |
 | `in_progress` → `held` | Orch (batch) | Integrator-QA files a claim naming the W-item | Integrator-QA | Claim filing — one commit writes `claims.md` (IC-NNN under Open) + `plan.md` (Status flip) |
@@ -374,12 +379,15 @@ The `held` state replaces the convention (used in earlier ADR-016 drafts) of lea
 
 ### `code_review` semantics
 
-A W-item enters `code_review` only in Developer mode, when the user has confirmed the feature works and the Developer is dispatching the code-review gate. The branch carries the implementation; a "ready for review" marker has been committed; the Developer has spawned a Reviewer subagent (`docs/dev_framework/templates/reviewer-brief.md`) on the diff. The Reviewer is a fresh process with its own context — it sees the W-item brief + diff, not the Developer's coding journey.
+A W-item enters `code_review` only in Developer mode, when the user has confirmed the feature works and the Developer is dispatching the code-review gate. The branch carries the implementation; a "ready for review" marker has been committed; the Developer has **synced the feature with `origin/dev` via rebase** (so the Reviewer reads accurate codebase context and the eventual merge is a fast-forward); then spawned a Reviewer subagent (`docs/dev_framework/templates/reviewer-brief.md`) on the synced state. The Reviewer is a fresh process — it sees the W-item brief + diff against `origin/dev`, not the Developer's coding journey.
 
-Two outcomes:
+Three outcomes, all user-mediated:
 
-- **Ship.** Developer merges to `dev`, writes Implementation log on the W-item file, flips `code_review → done` in one commit.
-- **Block.** Reviewer returns concerns. Developer surfaces them to user. Path back to `in_progress` is user-mediated — the Developer does not auto-loop. The user chooses: fix-and-retry (`code_review → in_progress` + re-code + re-confirm via user QA + re-spawn Reviewer), ship-with-known-limitation (recorded as a user override in the Implementation log + plan Notes; flip to `done`), or escalate.
+- **Ship.** Reviewer returns no blocking concerns. Developer merges feature → `dev` (fast-forward), writes Implementation log on the W-item file, flips `code_review → done` in one commit. Cleanup follows (worktree + branch deletion).
+- **Resolve.** Reviewer returns concerns the user wants fixed before merging. Status `code_review → in_progress`. Re-code, re-confirm via user QA, re-sync (in case dev advanced), re-spawn Reviewer.
+- **Postpone.** Reviewer returns concerns the user accepts as a known limitation. Concerns logged in the Implementation log under `**Postponed concerns:**` + plan Notes line. Merge proceeds as Ship; flip to `done`. Open follow-up W-item if the postponed concern is anything beyond a true known-limitation.
+
+Resolve vs Postpone is a user judgment: Resolve when the concern would cause user-visible breakage or violates a load-bearing standard; Postpone when the concern is real but not blocking shipment for this phase.
 
 ### Reconciliation (on session start)
 

@@ -37,8 +37,8 @@ N+1 Parallel Developers (a third or fourth session) are mechanically supported �
   Re-orientation paths are the same in both: an item at `code_review` after a session reset → "Reviewer hadn't returned a verdict yet; want me to re-spawn?" An item at `in_progress` after a context reset → "want me to resume?" Asks the user to confirm before any Status write.
 - **Codes one W-item at a time, in the user's loop.** Reads the W-item file for acceptance + Touches + References + Contingencies. Writes tests + code + commits on the W-item's branch. Operates the **80/20 confidence ladder** at every decision fork (see §"Confidence-driven escalation"): self ≥80% → act; self <80% → call advisor (or a research-flavored consultant subagent); advisor <80% → ask the user. Spawns subagents freely for narrow analysis (Doc Consultant, Code Consultant, one-shot edge-case investigation). The Reviewer/QA peer chain that Orchestrator mode runs is replaced by **user-mediated QA + spawned Reviewer** — different substitutions for those two gates, not a ban on subagents.
 - **Drives a user-mediated QA loop within `in_progress`.** The user is the QA gate. Developer writes code; user runs the feature; user reports what works and what doesn't; Developer fixes; user re-tests. State stays at `in_progress` throughout — no `qa` state, no automatic bounce. `in_progress` exits only when the user confirms the feature works.
-- **Hands off to a Reviewer subagent at the `in_progress → code_review` flip.** When the user confirms, Developer optionally runs `/compact` to compress its session context (recommended, not required), commits a "ready for review" marker on the branch, flips Status to `code_review`, and spawns a Reviewer subagent (`docs/dev_framework/templates/reviewer-brief.md`) on the diff. Reviewer is a fresh process — it sees the brief and the diff, not the Developer's coding journey. This gives the fresh-eyes property without UI gymnastics.
-- **Acts on the Reviewer verdict.** Pass → merge to `dev`, write Implementation log, flip `code_review → done`. Block → surface findings to user; user-mediated path back to `in_progress` (no auto-loop). The Developer remains the persistent owner of the W-item — it spawned the Reviewer, reads the verdict, decides the merge.
+- **Hands off to a Reviewer subagent at the `in_progress → code_review` flip.** When the user confirms, Developer optionally runs `/compact`, commits a "ready for review" marker on the branch, flips Status to `code_review`, **syncs the feature branch with `origin/dev`** via rebase (so the Reviewer reads accurate codebase context and the eventual merge is a fast-forward), then spawns a Reviewer subagent (`docs/dev_framework/templates/reviewer-brief.md`). Reviewer is a fresh process — it sees the brief and the diff against `origin/dev`, not the Developer's coding journey. Fresh-eyes property without UI gymnastics.
+- **Acts on the Reviewer verdict.** Three user-mediated outcomes: **Ship** → merge to `dev` (fast-forward, since pre-review sync rebased onto dev's tip), Implementation log, `code_review → done`. **Resolve** → user wants concerns fixed; back to `in_progress` for re-code + re-confirm + re-spawn Reviewer. **Postpone** → user accepts concerns as a known limitation; concerns logged in the Implementation log + plan Notes; merge proceeds as Ship. The Developer remains the persistent owner of the W-item — it spawned the Reviewer, reads the verdict, decides the merge.
 - **Appends an Implementation log to the W-item file at `code_review → done`.** A retrospective section capturing how the work actually went — approach, key decisions, pivots, surprising findings, loose ends. Atomic with the merge commit. Persists the journey on the project even though the session may have been compacted.
 - **Files Integration claims when acceptance is ambiguous.** Rare path — most ambiguity gets resolved with the user in real-time. But when mid-work the Developer realizes the proposed change requires an acceptance update beyond fixing-within-acceptance, it files `IC-NNN` in `claims.md` and flips `in_progress → held` atomically. Same protocol as the Integrator-QA's claim-filing. The Strategist + user dispose; Developer waits.
 - **Owns Status writes for Developer-mode transitions.** `pending → in_progress`, `in_progress → code_review`, `in_progress → held`, `in_progress → blocked`, `code_review → in_progress` (with user re-engagement), `code_review → done`, `done → shipped`. PLAN-WRITE DISCIPLINE applies at every write site.
@@ -154,12 +154,19 @@ pending → in_progress → code_review → done → shipped
    - **Parallel:** `git worktree add -b w-<id>/<slug> /tmp/worktrees/<project>/w-<id>-<slug> origin/dev`, then `cd` into the worktree for the rest of the session. The plan-write commit covers the same fields; the worktree creation itself is a separate command (no .git tracked artifact). Push the plan-write commit before any code begins so other sessions see the claim.
 3. **Code + commits.** Developer writes tests, code, commits on the W-item's branch. Applies the 80/20 confidence ladder at decision forks (advisor → consultant subagent → user; see §"Confidence-driven escalation"). Spawns analysis subagents freely for narrow research questions. The user is the test driver throughout `in_progress`.
 4. **User QA loop (within `in_progress`).** User runs the feature; Developer fixes; loop until user confirms it works. State stays at `in_progress`. No bounce, no separate `qa` state.
-5. **/compact + handoff commit.** When user confirms, Developer optionally runs `/compact` to compress its session context for the next item (recommended, not strictly required). Commits a "ready for review" marker on the branch and flips Status `in_progress → code_review` (one PLAN-WRITE commit). Push.
-6. **Spawn Reviewer subagent.** Developer invokes the Reviewer brief (`docs/dev_framework/templates/reviewer-brief.md`) via the Agent tool. Brief inputs: branch name + head SHA, working directory path (Default Dev: main checkout; Parallel Dev: worktree path), W-item file path. Reviewer loads `coding-standards.md` itself and returns a structured ship/block verdict.
-7. **Reviewer verdict + merge.**
-   - **Ship** → Developer merges to `dev`, writes Implementation log on the W-item file, flips `code_review → done` in one commit (merge + log + Status). **Then runs cleanup** (see §"Cleanup at done-flip" below): remove worktree (Parallel only), delete local branch, delete remote branch.
-   - **Block + concerns** → Developer surfaces concerns to user. The path back to `in_progress` is **user-mediated** — Developer doesn't auto-loop. User decides: fix-and-retry (`code_review → in_progress` + re-code with concerns as input + re-spawn Reviewer after re-confirming via the user QA loop), ship-with-known-limitation (recorded as user override in the Implementation log + plan Notes; flip to `done` + run cleanup), or escalate.
-8. **Phase exit.** When all items in the phase are `done`, user authorizes promotion. Developer promotes `dev → main`, flips `done → shipped` (one commit) for each item.
+5. **/compact + handoff commit.** When user confirms, Developer optionally runs `/compact` to compress its session context for the next item (recommended, not strictly required). Commits a "ready for review" marker on the branch and flips Status `in_progress → code_review` (one PLAN-WRITE commit). Push the feature branch to its origin ref.
+6. **Sync feature with `dev`.** `git fetch origin && git rebase origin/dev` on the feature branch.
+   - Up-to-date → no-op, continue.
+   - Behind → rebase replays this W-item's commits on top of `origin/dev`'s tip.
+   - Conflicts → surface to user, user resolves, then continue. The Reviewer will see the resolved state.
+
+   The Reviewer reads codebase context from the synced state, and the eventual merge to `dev` is a clean fast-forward (since feature is now strictly ahead of `origin/dev`).
+7. **Spawn Reviewer subagent on the synced state.** Developer invokes the Reviewer brief (`docs/dev_framework/templates/reviewer-brief.md`) via the Agent tool. Brief inputs: branch name + head SHA (post-rebase), working directory path (Default Dev: main checkout; Parallel Dev: worktree path), W-item file path. Reviewer loads `coding-standards.md` itself, reads the diff against `origin/dev`, and reads codebase context from the synced state.
+8. **Reviewer outcome — three paths, all user-mediated.**
+   - **Ship** → Developer merges feature → `dev` (fast-forward, since feature was rebased to dev's tip), writes Implementation log on the W-item file, flips `code_review → done` in one commit (merge + log + Status). Run cleanup (see §"Cleanup at done-flip"): worktree remove (Parallel only), `git branch -d`, `git push origin --delete`.
+   - **Resolve** → Reviewer flagged concerns the user wants fixed. Status `code_review → in_progress`. Developer re-codes with concerns as input. After re-confirming via user QA loop, re-spawn Reviewer (re-sync if `dev` advanced again).
+   - **Postpone** → Reviewer flagged concerns the user wants to defer (known limitation, follow-up W-item, or just-not-now). Logged in the Implementation log under a `**Postponed concerns:**` line AND a Notes line on the plan. Merge proceeds as in Ship; flip to `done`. Open a follow-up W-item if the postponed concern needs tracking.
+9. **Phase exit.** When all items in the phase are `done`, user authorizes promotion. Developer promotes `dev → main`, flips `done → shipped` (one commit) for each item.
 
 ## Plan-write discipline (Developer)
 
@@ -169,34 +176,44 @@ Every Status write follows the same discipline as Orchestrator / Integrator-QA /
 2. Edit the row(s) — flip Status, populate Branch where relevant.
 3. Commit alongside the trigger event in ONE commit. Examples:
    - `pending → in_progress`: commit covers Status flip + Branch field populate + Notes claim line. Branch (Default) or worktree+branch (Parallel) creation happens immediately before/after as separate git operations.
-   - `in_progress → code_review`: commit covers Status flip + a "ready for review" marker on the W-item branch. Reviewer subagent is spawned right after.
-   - `code_review → done`: commit covers the merge to `dev` + Implementation log on the W-item file + Status flip. **Cleanup (worktree + branch deletion) runs after the push succeeds** — see §"Cleanup at done-flip" in the Code-review section.
+   - `in_progress → code_review`: commit covers Status flip + a "ready for review" marker on the W-item branch. Sync (rebase on origin/dev) + Reviewer-subagent spawn happen right after — those are separate git/agent operations, not plan-writes.
+   - `code_review → done`: commit covers the fast-forward merge to `dev` (clean because of pre-review sync) + Implementation log on the W-item file + Status flip. The Implementation log includes a `**Postponed concerns:**` line if the user chose Postpone. **Cleanup (worktree + branch deletion) runs after the push succeeds** — see §"Cleanup at done-flip" in the Code-review section.
    - `in_progress → held`: commit covers Status flip + new IC-NNN entry under "## Open" in `claims.md`.
 4. Verify push (`git push origin <branch>` or `origin dev` / `origin main` per the merge target). The plan must be pushed before any further work, so other roles (Strategist on a triage pass, Orchestrator inspecting state) read truth.
 
 A stale plan is a ledger lie. Same doctrine the other three writers operate under.
 
-## Code review (spawned Reviewer subagent)
+## Code review (sync, then spawned Reviewer subagent)
 
 When the user confirms the feature works, coding is complete but the code-review gate hasn't run. The handoff:
 
 1. **/compact (recommended).** Developer runs `/compact` to compress its session context — the journey of getting here (debug iterations, advisor calls, abandoned approaches) collapses into a summary. Keeps the persistent session tight for the next W-item. Optional, not required for correctness.
 
-2. **Status flip + handoff commit.** Developer commits a "ready for review" marker on the W-item branch and flips Status `in_progress → code_review` atomically. Push.
+2. **Status flip + handoff commit.** Developer commits a "ready for review" marker on the W-item branch and flips Status `in_progress → code_review` atomically. Push the feature branch to its origin ref.
 
-3. **Spawn Reviewer subagent.** Developer invokes the Reviewer brief (`docs/dev_framework/templates/reviewer-brief.md`) via the Agent tool, passing:
-   - Branch name + head SHA
+3. **Sync feature with `dev`.** `git fetch origin && git rebase origin/dev` on the feature branch. Three outcomes:
+   - **Up-to-date** → no-op, continue.
+   - **Behind** → rebase replays this W-item's commits on top of `origin/dev`'s tip. Force-push the feature ref afterwards (`git push --force-with-lease origin <feature>`) so the Reviewer fetches the rebased SHA, not the pre-rebase one.
+   - **Conflicts** → surface to user, user resolves, continue. The Reviewer will see the resolved state.
+
+   Rationale: the Reviewer reads codebase context from the synced state (accurate, not stale), and the eventual merge to `dev` becomes a clean fast-forward (since feature is now strictly ahead of `origin/dev`).
+
+4. **Spawn Reviewer subagent on the synced state.** Developer invokes the Reviewer brief (`docs/dev_framework/templates/reviewer-brief.md`) via the Agent tool, passing:
+   - Branch name + head SHA (post-rebase)
    - Working directory path (Default: main checkout; Parallel: worktree path)
    - W-item file path (Reviewer reads acceptance + Touches + References)
-   - The Reviewer loads `coding-standards.md` itself
+   - The Reviewer loads `coding-standards.md` itself, reads the diff against `origin/dev`, and reads codebase context from the synced state.
 
-4. **Verdict.**
-   - **Ship** → Developer merges to `dev`, writes Implementation log on the W-item file, flips `code_review → done` in one commit (merge + log + Status).
-   - **Block + concerns** → Developer surfaces concerns to user. The path back to `in_progress` is **user-mediated** — Developer doesn't auto-loop. User decides: fix-and-retry (`code_review → in_progress` + re-code with concerns as input + re-confirm via user QA loop + re-spawn Reviewer), ship-with-known-limitation (user override recorded in the Implementation log + plan Notes; flip to `done`), or escalate.
+5. **Reviewer outcome.** Three paths, all user-mediated:
+   - **Ship** → Developer merges feature → `dev` (fast-forward), writes Implementation log on the W-item file, flips `code_review → done` in one commit (merge + log + Status). Cleanup runs after the push (see §"Cleanup at done-flip").
+   - **Resolve** → Reviewer flagged concerns the user wants fixed before merging. Status `code_review → in_progress`. Developer re-codes with concerns as input. After re-confirming via the user QA loop, the Developer loops back to step 1 — re-sync (in case dev advanced again during the rework) and re-spawn the Reviewer.
+   - **Postpone** → Reviewer flagged concerns the user accepts as a known limitation. Implementation log includes a `**Postponed concerns:**` line naming the concerns + why they're being deferred + where they'll be addressed (follow-up W-item id, or `tracked as known limitation`). A Notes line on the plan also names the postpone. Merge proceeds as in Ship; flip to `done`. Open a follow-up W-item if the postponed concern is anything beyond a true known-limitation.
 
-The Reviewer is a **fresh process** with its own context — it has not seen the Developer's coding journey, only the diff + brief. This gives the fresh-eyes property without UI gymnastics.
+   The user's choice between Resolve and Postpone is a judgment call — Postpone is the right answer when the concern is real but not blocking shipment for this phase (e.g., performance tuning, edge-case handling that's rare, refactor for elegance). Resolve is right when the concern would cause user-visible breakage or violates a load-bearing standard.
 
-The Developer remains the **persistent owner** of the W-item: it spawned the Reviewer, reads the verdict, decides the merge, writes the Implementation log. The Reviewer is a peer subagent in service of that ownership, not a separate authority.
+The Reviewer is a **fresh process** with its own context — it has not seen the Developer's coding journey, only the diff against `origin/dev` + brief. This gives the fresh-eyes property without UI gymnastics.
+
+The Developer remains the **persistent owner** of the W-item: it spawned the Reviewer, reads the verdict, decides the merge (with the user on Resolve/Postpone choice), writes the Implementation log. The Reviewer is a peer subagent in service of that ownership, not a separate authority.
 
 ### Recovery from interrupted reviews
 
@@ -258,6 +275,9 @@ Section appended to the W-item file at the `code_review → done` flip, atomic w
 
 **Surprises:**
 - Anything the work uncovered that future readers should know (or "none").
+
+**Postponed concerns** (only when Reviewer flagged + user chose Postpone — omit this line otherwise):
+- Concern 1 — why postponed, where it'll be addressed (follow-up W-item id, or "tracked as known limitation").
 
 **Followups / loose ends:**
 - Anything intentionally deferred. Open as a separate W-item or note here for the next phase (or "none").
