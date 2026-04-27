@@ -109,3 +109,16 @@ Dev and prod are separate CI workflows and separate URLs:
 - Prod: `{{sub}}.{{website}}.com` (the live URL from CLAUDE.md — no `dev` subdomain)
 
 The "CI-only deploys" rule from CLAUDE.md applies to prod. Dev is whatever the mode says — local means "run it yourself," remote means "CI deploys on dev push." Both are allowed; neither counts as a prod deploy.
+
+### Pointing prod at a non-main branch (escape hatch)
+
+Sometimes WIP needs to be reachable at the prod URL before it's been promoted to `main` — usually because the work depends on prod-only data, integrations, or auth surfaces that dev doesn't carry. The "CI-only deploys to prod" rule still holds; what changes is the branch CI deploys *from*.
+
+Discipline:
+
+1. **Pre-flight.** User flips the branch CI deploys to prod from `main` → `dev` or `<feature>`. Whatever surface CI watches (workflow file, deploy config, manual trigger) is project-specific. Confirm the flip took effect at the prod URL before the Developer starts iterating.
+2. **Work normally.** Developer (or Orchestrator) drives the W-item through its standard lifecycle. The user-mediated QA loop runs against the prod URL since that's where the WIP is now reachable. Plan-writes still go on `dev` per PLAN-WRITE DISCIPLINE — the prod-pointer flip changes deploy mechanics, not branching mechanics.
+3. **Merge to `main`.** Standard Ship path: feature → dev → main, all via CI. The just-shipped work is now on `main`.
+4. **Post-flight: flip back.** Switch CI's prod deploy branch back to `main`. **This is easy to forget** — if you skip it, prod silently keeps deploying dev/feature, and the next item that merges to `main` doesn't reach the live URL until someone notices the divergence.
+
+Forcing function: the Developer's `Cleanup at done-flip` discipline (in `developer.md`) includes a prod-pointer check before the W-item closes. The Orchestrator's phase-exit promotion should do the same when a phase was driven under this escape hatch. Both ask the user directly because the CI surface is project-specific — the agent can't probe it generically.

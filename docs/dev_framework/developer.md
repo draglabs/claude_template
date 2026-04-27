@@ -292,6 +292,8 @@ If `git branch -d` reports "not fully merged" or `git worktree remove` says the 
 
 The bootstrap reconciliation is the safety net for cleanup discipline that didn't run (session crashed, prior agent forgot, etc.). It catches what the per-item cleanup misses.
 
+**Prod deploy-branch flip-back.** If the user pointed prod at this feature branch (or `dev`) for the user-QA loop — the escape hatch documented in [`dev-environment.md`](dev-environment.md) §"Pointing prod at a non-main branch" — confirm the deploy-branch is back at `main` before declaring the W-item closed. The Developer doesn't know the project's CI shape, so the forcing function is to **ask the user** at done-flip: "Is prod's deploy branch back at `main`?" If no, surface the flip-back as a user action (it's a CI config edit, not a git operation the Developer runs). Skipping this means prod silently keeps tracking dev/feature, and the next item that merges to `main` doesn't reach the live URL until someone notices.
+
 ## Implementation log
 
 Section appended to the W-item file at the `code_review → done` flip, atomic with the merge commit. Persists the journey on the project — `/compact` collapses the journey from the persistent session, and the spawned Reviewer never saw it; the Implementation log is the only durable record of how the work actually happened.
