@@ -11,6 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Project variables (fill these in, used across docs and QA briefs):
 - `{{sub}}` — this project's subdomain (e.g. `myapp`)
 - `{{website}}` — shared parent domain (e.g. `draglabs.com`)
+- `{{ports}}` — local port range allocated to this project (e.g. `3050-3060` or `305*`); local dev runtimes (Docker, native dev server, reverse proxy) bind within this range. See [`docs/dev_framework/dev-environment.md`](docs/dev_framework/dev-environment.md) §"Port allocation (local-hosted)".
 
 <!-- BEGIN FRAMEWORK MANAGED -->
 <!--

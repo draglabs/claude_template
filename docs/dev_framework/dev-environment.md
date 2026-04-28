@@ -53,7 +53,7 @@ The trigger: user starts the first Orchestrator session, says "set up the dev en
 
 The goal: `curl https://{{sub}}.dev.{{website}}.com` from the user's laptop hits the local dev server.
 
-1. **Confirm project variables.** Read `{{sub}}` and `{{website}}` from CLAUDE.md. If they're still placeholders, prompt the user to fill them in first.
+1. **Confirm project variables.** Read `{{sub}}`, `{{website}}`, and `{{ports}}` from CLAUDE.md. If any are still placeholders, prompt the user to fill them in first — `{{ports}}` is allocated by the user (e.g. `3050-3060`) so different projects on the same laptop don't collide. See §"Port allocation (local-hosted)" for the binding + teardown discipline.
 2. **Pick a DNS strategy.**
    - **Option i — `/etc/hosts` entry.** Simplest. Add `127.0.0.1  {{sub}}.dev.{{website}}.com` to `/etc/hosts`. Works, but each new subdomain needs a new entry. Good for single-project.
    - **Option ii — wildcard via local DNS.** Tools like `dnsmasq` (Linux/macOS) or `Acrylic` (Windows) resolve `*.dev.{{website}}.com` → `127.0.0.1`. Better when the user works on multiple projects under the same `{{website}}`.
@@ -100,6 +100,16 @@ The user doesn't interact with dev-environment details again unless:
 - A new subdomain is needed (spawns a mini-bootstrap).
 - The local redirect breaks (usually `/etc/hosts` edit was lost, or DNS changed).
 - The remote dev server goes down (different kind of problem — probably escalate to the user).
+
+## Port allocation (local-hosted)
+
+Each project gets a fixed port range at first-time setup, recorded as `{{ports}}` in CLAUDE.md (e.g. `3050-3060` or `305*`). Local dev runtimes — Docker containers, native dev servers (`npm run dev`, `vite`, etc.), reverse proxies — bind within that range and nowhere else. The reverse-proxy config in §"Local-hosted bootstrap walkthrough" step 4 maps the project's subdomain to a chosen port within the range.
+
+**Why a range, not a single port.** Parallel work. The Default Developer, a Parallel Developer working a different W-item, and a one-off smoke-test container can each claim a different port within the range without colliding. Ten ports per project covers any realistic level of parallel local activity on one laptop.
+
+**Allocation is fixed for the project's lifetime.** The user assigns the range at first-time setup so different projects on the same laptop don't collide. Moving it after the fact requires updating reverse-proxy configs, `mkcert` certs, and any hardcoded references — possible but not free, so pick a range that won't conflict with existing tools (avoid `3000`, `8000`, `8080` defaults if those are already in use elsewhere).
+
+**Per-W-item binding + teardown.** When a Developer (Default or Parallel) brings up a local runtime to drive the user-QA loop, it picks a port within `{{ports}}`. When the W-item ships through to `done`, the runtime is torn down — see [`developer.md`](developer.md) §"Cleanup at done-flip". Leaving containers running between W-items accumulates resource residue and burns port slots the next session expects to be free.
 
 ## Relationship to production
 
