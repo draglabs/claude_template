@@ -4,13 +4,25 @@ The Developer is a persistent Claude Code session (Opus) that the user invokes f
 
 The Developer's defining trait is the **tight code-QA loop with the user**: the user is the QA gate (real-time, in the loop, iterating fix-test-fix until the feature works), and after that loop completes, the Developer hands off to a **spawned Reviewer subagent** for the code-review gate. This combination — user-mediated QA + spawned-Reviewer code review — gives fresh eyes on every gate without the user having to drive a multi-step UI ritual. The Developer remains the persistent owner of each W-item end-to-end, including the merge and the Implementation log.
 
+## Working directory: $CODE_ROOT
+
+All paths, git commands, and worktrees in this doc are relative to **`$CODE_ROOT`** — the git repository root. Under split layout (canonical), `$CODE_ROOT = $PROJECT_DIR/$DEFAULT_CODE_SUBDIR` (or the W-item's `Target-repo:` override). Under flat layout (legacy), `$CODE_ROOT == $PROJECT_DIR`. Plan and doc writes always go to `$PROJECT_DIR/docs/`.
+
+**Default Developer bootstrap under split layout:** `claude` is invoked from `$PROJECT_DIR`, which under split layout is NOT a git repo. **`cd $CODE_ROOT` is the first action at bootstrap** — before any `git` commands on the code repo. The Parallel Developer's worktree setup handles this implicitly (`git worktree add ... && cd <worktree>`). Under flat layout `$CODE_ROOT == $PROJECT_DIR`, no explicit `cd` needed.
+
+**Plan-write commit semantics under split layout:** Plan files live at `$PROJECT_DIR/docs/...`, which is outside `$CODE_ROOT`. If `$PROJECT_DIR` is also a git repo (a separate tracking repo), plan edits can be committed and pushed there for full PLAN-WRITE DISCIPLINE concurrent-claim safety. If not, plan writes are file-only edits — visible to concurrent sessions via shared filesystem, but the push-then-fail collision guard is unavailable. The `git commit` / `git push origin dev` steps in the lifecycle sequences below target the code repo and cover plan.md only under flat layout.
+
+For multi-repo projects, check the W-item's `Target-repo:` field before claiming — it may point to a different subdirectory than the default.
+
+`<project>` in worktree paths (e.g. `/tmp/worktrees/<project>/`) = `basename $CODE_ROOT` = the git repo name.
+
 ## Invocation patterns
 
 The Developer has two named invocations sharing one role doc, lifecycle, and discipline. The user picks at session start based on whether another Developer session is already running.
 
 ### Default Developer — `"you are the Developer"`
 
-- Works in your **main checkout** — the directory the terminal is `cd`'d into when `claude` started.
+- Works in **`$CODE_ROOT`** (the git repository root; see §"Working directory: $CODE_ROOT"). Under split layout (canonical), `claude` starts in `$PROJECT_DIR` (tracking directory, not the git repo) — `cd $CODE_ROOT` at bootstrap before any git operations.
 - At claim time creates a feature branch (`w-<id>/<slug>`) in place: `git checkout -b w-<id>/<slug> origin/dev`. No worktree.
 - Bootstrap scan proposes the **top critical-path** `pending` item by Depends-on graph.
 - The session you actively collaborate with — most coding, most user-QA-loop iteration.
@@ -152,11 +164,12 @@ pending → in_progress → code_review → done → shipped
 2. **Confirm + plan-write on `dev` + branch/worktree creation.** Before any code, the Developer asks the user "Ready to start coding W-X?" The claim is recorded with a plan-write **on `dev`** so other sessions see it via `origin/dev/plan.md`:
 
    ```
-   # In main checkout:
+   # From $CODE_ROOT:
+   # Default Dev: cd $CODE_ROOT first (under split layout $PROJECT_DIR is not the git repo)
+   # Parallel Dev: cd $CODE_ROOT (leave the worktree; $CODE_ROOT = main checkout path)
    git checkout dev && git pull origin dev
-   # Edit plan.md: Status pending → in_progress, Branch field populate (w-<id>/<slug>),
-   # Notes line ("W-<id> — claimed by Developer YYYY-MM-DD" / "claimed by Parallel Developer ...").
-   git commit -m "Claim W-<id> (pending → in_progress)"
+   # Edit plan.md at $PROJECT_DIR/docs/... (file edit from any cwd using full path)
+   git commit -m "Claim W-<id> (pending → in_progress)"  # commits plan.md only under flat layout
    git push origin dev
    ```
 
@@ -168,14 +181,14 @@ pending → in_progress → code_review → done → shipped
 3. **Code + commits.** Developer writes tests, code, commits on the W-item's branch. Applies the 80/20 confidence ladder at decision forks (advisor → consultant subagent → user; see §"Confidence-driven escalation"). Spawns analysis subagents freely for narrow research questions. The user is the test driver throughout `in_progress`.
 4. **User QA loop (within `in_progress`).** User runs the feature; Developer fixes; loop until user confirms it works. State stays at `in_progress`. No bounce, no separate `qa` state.
 5. **/compact + plan-write Status flip on `dev`.** When user confirms, Developer optionally runs `/compact` to compress its session context (recommended, not strictly required). The plan-write — flipping Status `in_progress → code_review` and adding a Notes line — happens **on `dev`**, not on the feature branch:
-   - **Parallel Dev:** `cd <main checkout path>` (leave the worktree). Default Dev is already in the main checkout.
+   - **Parallel Dev:** `cd $CODE_ROOT` (leave the worktree; `$CODE_ROOT = $PROJECT_DIR/$DEFAULT_CODE_SUBDIR` under split layout). **Default Dev:** already at `$CODE_ROOT` from bootstrap.
    - `git checkout dev && git pull origin dev`
-   - Edit `plan.md` (Status flip + Notes line) and commit
+   - Edit `plan.md` at `$PROJECT_DIR/docs/...` (file edit using full path) and commit
    - `git push origin dev`
 
    Plan-writes go on `dev` so they're immediately visible to other sessions reading `origin/dev` (the concurrent-claim safety surface). Putting them on the feature branch would hide Status updates until merge, defeating the visibility property.
 
-   **Parallel Dev:** return to the worktree (`cd /tmp/worktrees/<project>/w-<id>-<slug>`) before step 6 so subsequent feature-branch work touches the worktree's working tree, not the main checkout. Default Dev stays in place.
+   **Parallel Dev:** return to the worktree (`cd /tmp/worktrees/<project>/w-<id>-<slug>`) before step 6 so subsequent feature-branch work touches the worktree's working tree, not the main checkout. Default Dev stays at `$CODE_ROOT`.
 6. **Sync feature with `dev`.** Switch back to the feature branch and rebase on the new `origin/dev`:
    - Default Dev: `git checkout w-<id>/<slug>`
    - Parallel Dev: `cd /tmp/worktrees/<project>/w-<id>-<slug>`
@@ -217,9 +230,9 @@ When the user confirms the feature works, coding is complete but the code-review
 1. **/compact (recommended).** Developer runs `/compact` to compress its session context — the journey of getting here (debug iterations, advisor calls, abandoned approaches) collapses into a summary. Keeps the persistent session tight for the next W-item. Optional, not required for correctness.
 
 2. **Status flip on `dev`.** Plan-writes go on `dev` (not on the feature branch) so they're immediately visible on `origin/dev/plan.md`:
-   - `cd <main checkout path>` (Parallel Dev only; Default is already there)
+   - **Parallel Dev:** `cd $CODE_ROOT` (leave the worktree). **Default Dev:** already at `$CODE_ROOT` from bootstrap.
    - `git checkout dev && git pull origin dev`
-   - Edit `plan.md` (Status `in_progress → code_review` + Notes line)
+   - Edit `plan.md` at `$PROJECT_DIR/docs/...` (Status `in_progress → code_review` + Notes line)
    - `git commit -m "W-<id>: in_progress → code_review"`
    - `git push origin dev`
 

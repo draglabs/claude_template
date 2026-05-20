@@ -19,8 +19,10 @@ PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd -P)"
 # ---------------------------------------------------------------------------
 # 1. Resolve template root, in this order:
 #    (a) CLAUDE_TEMPLATE_ROOT from the shell environment
-#    (b) CLAUDE_TEMPLATE_ROOT= line in the project's .env
-#    (c) sibling directory ../claude_template
+#    (b) CLAUDE_TEMPLATE_ROOT= line in $PROJECT_DIR/.env
+#    (c) CLAUDE_TEMPLATE_ROOT= line in any immediate subdir's .env that has .git/
+#        (supports split-layout adopters whose single .env is inside the code repo)
+#    (d) sibling directory ../claude_template
 # Error (exit 0 with warning) if none resolve.
 # ---------------------------------------------------------------------------
 
@@ -32,6 +34,18 @@ if [[ -z "$TEMPLATE_ROOT" && -f "$PROJECT_DIR/.env" ]]; then
                     | head -1 | cut -d= -f2- | sed 's/^["'"'"']//; s/["'"'"']$//')"
 fi
 
+# Fallback: scan immediate subdirectories that look like git repos and try
+# their .env files. This supports split-layout adopters whose single .env
+# lives inside the code subdirectory rather than at the parent level.
+if [[ -z "$TEMPLATE_ROOT" ]]; then
+  for subdir in "$PROJECT_DIR"/*/; do
+    [[ -d "$subdir/.git" && -f "$subdir/.env" ]] || continue
+    TEMPLATE_ROOT="$(grep -E '^CLAUDE_TEMPLATE_ROOT=' "$subdir/.env" 2>/dev/null \
+                      | head -1 | cut -d= -f2- | sed 's/^["'"'"']//; s/["'"'"']$//')"
+    [[ -n "$TEMPLATE_ROOT" ]] && break
+  done
+fi
+
 if [[ -z "$TEMPLATE_ROOT" ]]; then
   CANDIDATE="$PROJECT_DIR/../claude_template"
   if [[ -d "$CANDIDATE" ]]; then
@@ -40,7 +54,7 @@ if [[ -z "$TEMPLATE_ROOT" ]]; then
 fi
 
 if [[ -z "$TEMPLATE_ROOT" || ! -d "$TEMPLATE_ROOT" ]]; then
-  echo "[sync-framework] WARN: claude_template not found. Tried: \$CLAUDE_TEMPLATE_ROOT env, .env, ../claude_template. Skipping sync."
+  echo "[sync-framework] WARN: claude_template not found. Tried: \$CLAUDE_TEMPLATE_ROOT env, \$PROJECT_DIR/.env, immediate-subdir .env files, ../claude_template. Skipping sync."
   exit 0
 fi
 
@@ -53,6 +67,21 @@ TEMPLATE_ROOT="$(cd "$TEMPLATE_ROOT" && pwd -P)"
 if [[ "$PROJECT_DIR" == "$TEMPLATE_ROOT" ]]; then
   echo "[sync-framework] This project IS the template — no sync."
   exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# 2b. Flat-layout detection.
+#     If $PROJECT_DIR contains a .git/ directory, the project is using the
+#     legacy flat layout (project dir == git repo). Emit a migration notice
+#     and continue — the sync itself is still valid (all sync targets write
+#     to $PROJECT_DIR, which is correct for both layouts). See ADR-019.
+# ---------------------------------------------------------------------------
+
+if [[ -d "$PROJECT_DIR/.git" ]]; then
+  echo "[sync-framework] NOTICE: flat layout detected — this project's working directory IS the git repository."
+  echo "[sync-framework] The canonical framework layout is split: tracking material (CLAUDE.md, docs/, .claude/) lives in a parent directory; the git repo is a named subdirectory."
+  echo "[sync-framework] Migration guide: docs/dev_framework/migration-guide-split-layout.md"
+  echo "[sync-framework] Sync continuing (flat layout still supported; migration recommended)."
 fi
 
 # ---------------------------------------------------------------------------

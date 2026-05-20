@@ -280,7 +280,7 @@ Every W-item follows one of two flows depending on its `Parallel-safe` field (se
 
 ### Sequential mode (Parallel-safe: false or unset)
 
-1. **Orchestrator** pre-creates the worktree explicitly off `origin/dev` with `git worktree add -b w-<id>/<slug> <path> origin/dev`, then dispatches the Executor via the Agent tool (WITHOUT the `isolation: "worktree"` flag — the Orchestrator owns worktree creation under this model). The Executor works inside the pre-created worktree.
+1. **Orchestrator** pre-creates the worktree explicitly off `origin/dev` with `git worktree add -b w-<id>/<slug> <path> origin/dev`, then dispatches the Executor via the Agent tool (WITHOUT the `isolation: "worktree"` flag — the Orchestrator owns worktree creation under this model). The Executor works inside the pre-created worktree. The standard worktree path is `/tmp/worktrees/<project>/w-<id>-<slug>`, where `<project>` = `basename $CODE_ROOT` (the git repo name; see `context-management.md §Project layout`). Under split layout this is the `$CODE_SUBDIR` name; under flat layout it is `basename $PROJECT_DIR`.
 
    **Mechanism, not intention.** The Agent tool's `isolation: "worktree"` flag creates a worktree from the parent session's current HEAD. If the Orchestrator happens to be sitting on `main` (or any other branch) when it dispatches, the worktree — and therefore the feature branch — inherits THAT base. Rule compliance here requires the Orchestrator to pre-create the worktree off `origin/dev` explicitly so the base becomes a literal command-line argument. "I read the rule" is not enforcement. The command is.
 

@@ -73,6 +73,14 @@ Feature branches merge to **`dev`**, dev promotes to **`main`** at phase boundar
 
 Code-level rules (TDD, no hardcoded lifecycle values, fail loudly) live in [`docs/dev_framework/coding-standards.md`](docs/dev_framework/coding-standards.md) and are enforced by the Executor (writing) and Reviewer (checking) subagent briefs. The Orchestrator and Strategist do NOT load that doc — they delegate enforcement to the subagent layer.
 
+## Project layout
+
+**Canonical layout: split.** Claude Code is invoked from a parent directory (`$PROJECT_DIR`) that holds tracking material (`CLAUDE.md`, `docs/`, `.claude/`). The git repo lives at `$PROJECT_DIR/$CODE_SUBDIR`. `$CODE_ROOT = $PROJECT_DIR/$CODE_SUBDIR`.
+
+Set `DEFAULT_CODE_SUBDIR=<repo-slug>` in `$PROJECT_DIR/.env`. For multi-repo projects, W-item files carry `Target-repo: <subdir>` to override the default.
+
+Flat layout (project dir == git root) is legacy. Session-start sync will warn if detected. See [`docs/dev_framework/migration-guide-split-layout.md`](docs/dev_framework/migration-guide-split-layout.md).
+
 ## Framework sync on SessionStart
 
 On every session start (fresh, resume, `/clear`, `/compact`), two hooks run in order:
@@ -80,7 +88,7 @@ On every session start (fresh, resume, `/clear`, `/compact`), two hooks run in o
 1. `.claude/hooks/sync-framework.sh` — destructively syncs `docs/dev_framework/` and `.claude/hooks/` from the canonical `claude_template` repo, initializes `docs/framework_exceptions/` if missing, and refreshes this managed block. Adopters are expected to make changes ONLY in `docs/framework_exceptions/*`, never in `docs/dev_framework/*`. See [ADR-014](docs/architecture/adr-014-framework-sync-on-session-start.md).
 2. `.claude/hooks/session-reorient.sh` — injects a role re-orientation reminder tailored to the `source` of the reset. See [ADR-012](docs/architecture/adr-012-auto-reorient-hook.md).
 
-The template root is resolved via `$CLAUDE_TEMPLATE_ROOT` env var → `.env` file var → `../claude_template` sibling dir, in that order. If none resolve, sync is skipped with a warning.
+The template root is resolved via `$CLAUDE_TEMPLATE_ROOT` env var → `$PROJECT_DIR/.env` → immediate-subdir `.env` files (for split-layout adopters) → `../claude_template` sibling dir, in that order. If none resolve, sync is skipped with a warning.
 
 ## MCP (.mcp.json)
 
