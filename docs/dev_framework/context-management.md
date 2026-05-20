@@ -29,6 +29,15 @@ For **multi-repo projects** (N code repos under one parent), the plan's W-item f
 
 Project dir == git root. `$CODE_ROOT == $PROJECT_DIR`. The sync hook emits a migration warning on every session start. See `docs/dev_framework/migration-guide-split-layout.md` for steps.
 
+### `$PROJECT_DIR` git tracking is optional
+
+Under split layout, the parent directory is **not required to be a git repo**. Two sanctioned modes (ADR-019):
+
+- **Untracked parent (default):** plain files for CLAUDE.md / docs / .claude. Plan-write visibility is via shared filesystem only — concurrent sessions see plan.md edits immediately, but the push-then-fail collision guard is unavailable. Sufficient for solo or single-machine multi-session work.
+- **Tracked parent (optional):** `$PROJECT_DIR` is its own git repo with its own remote. Plan edits commit + push there. Full PLAN-WRITE DISCIPLINE concurrent-claim safety + durable plan history; right for team work or multi-machine setups.
+
+Code-side git operations (`git push origin dev`, `git push origin main`) ALWAYS happen in `$CODE_ROOT` and are independent of whether the parent is tracked.
+
 ### How roles use $CODE_ROOT
 
 | Role | Working tree | Notes |

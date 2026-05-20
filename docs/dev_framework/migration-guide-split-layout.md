@@ -119,6 +119,31 @@ No `NOTICE: flat layout detected` line = migration complete.
 
 ---
 
+## Optional: track `$PROJECT_DIR` as its own git repo
+
+ADR-019 sanctions two modes for `$PROJECT_DIR` git tracking:
+
+- **Untracked (default, simpler).** `$PROJECT_DIR` has no `.git/`. Tracking material is plain files; plan-write visibility is via shared filesystem only. Fine for solo or single-machine multi-session work — and what you have after completing the steps above.
+- **Tracked (optional, full discipline).** `$PROJECT_DIR` is its own git repo with its own remote (a "project management" repo). Plan edits, ADRs, and tracking material are committed and pushed there. Gives full PLAN-WRITE DISCIPLINE concurrent-claim safety + durable plan history. Right for team work, multi-machine setups, or when plan history needs to outlive disk failures.
+
+To enable tracked-parent mode after migration:
+
+```bash
+cd $PROJECT_DIR
+git init
+# Add a .gitignore that excludes <repo-slug>/ (it's its own git repo)
+echo "<repo-slug>/" > .gitignore
+echo ".env" >> .gitignore        # parent .env often holds secrets
+git add CLAUDE.md .claude docs .mcp.json .gitignore
+git commit -m "Initial commit: tracking material"
+git remote add origin git@github.com:your-org/<project>-tracking.git
+git push -u origin main
+```
+
+Code-side git operations always happen in `$CODE_ROOT` regardless. The two repos are independent; the parent repo holds plan/doc history, the code repo holds source history.
+
+---
+
 ## Multi-repo projects
 
 If one parent holds N code repos, add entries in `.env` for each after the migration:

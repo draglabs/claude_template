@@ -79,6 +79,8 @@ Code-level rules (TDD, no hardcoded lifecycle values, fail loudly) live in [`doc
 
 Set `DEFAULT_CODE_SUBDIR=<repo-slug>` in `$PROJECT_DIR/.env`. For multi-repo projects, W-item files carry `Target-repo: <subdir>` to override the default.
 
+**`$PROJECT_DIR` git tracking is optional.** Two sanctioned modes (ADR-019): *untracked parent* (default, simpler — plan-write visibility via shared filesystem) or *tracked parent* (optional — `$PROJECT_DIR` is its own git repo for full PLAN-WRITE DISCIPLINE concurrent-claim safety + durable plan history). Code-side `git push origin dev/main` always operates on `$CODE_ROOT`, independent of which mode.
+
 Flat layout (project dir == git root) is legacy. Session-start sync will warn if detected. See [`docs/dev_framework/migration-guide-split-layout.md`](docs/dev_framework/migration-guide-split-layout.md).
 
 ## Framework sync on SessionStart

@@ -107,6 +107,19 @@ For multi-repo projects, `DEFAULT_CODE_SUBDIR` names the primary repo (used when
 
 ---
 
+## `$PROJECT_DIR` git tracking: optional
+
+The split layout does **not require** `$PROJECT_DIR` to be a git repo. Both modes are first-class:
+
+- **Untracked parent (default, simpler).** `$PROJECT_DIR` has no `.git/`. Tracking material (CLAUDE.md, docs/, .claude/, .mcp.json) lives as plain files. Plan edits are file-only writes; concurrent-claim safety relies on shared-filesystem visibility (sessions reading `$PROJECT_DIR/docs/execution-plans/plan.md` see updates immediately). The push-then-fail collision guard from PLAN-WRITE DISCIPLINE is unavailable but rarely needed in practice for single-machine multi-session work.
+- **Tracked parent (optional, full discipline).** `$PROJECT_DIR` is its own git repo with its own remote (e.g., a "project management" repo tracking plan history, ADRs, and tracking material across phases). Plan edits commit + push there. Full PLAN-WRITE DISCIPLINE concurrent-claim safety, plus durable plan history.
+
+Adopters choose based on context: solo work on a single machine → untracked parent is sufficient; team work where plan history matters or where multiple machines need synchronized plans → tracked parent.
+
+**Code-side git operations (branching, merging, pushing the code repo's `dev`/`main`) always happen in `$CODE_ROOT` and are independent of whether the parent is tracked.** The `git push origin dev` and `git push origin main` steps throughout the framework refer to the CODE repo's branches, not the parent's. This holds in both modes.
+
+---
+
 ## W-item field addition: `Target-repo`
 
 For multi-repo projects, W-item files gain an optional metadata field:
@@ -176,10 +189,6 @@ The following docs have not been updated to reference `$CODE_ROOT` or the split-
 - `docs/dev_framework/templates/integrator-qa-brief.md`
 
 These files are not blockers for adopters working in split layout today — the cd discipline is defined in `developer.md §Working directory: $CODE_ROOT` and `context-management.md §Project layout`, and those are the primary references roles read. The above files will be updated in a follow-up pass once the split layout is validated across more adopters.
-
-### 3. Plan-write commit semantics under split layout
-
-When `$PROJECT_DIR` is not itself a git repo, plan edits at `$PROJECT_DIR/docs/execution-plans/...` cannot be git-committed as part of the code repo's `dev` branch. PLAN-WRITE DISCIPLINE's `git push origin dev` concurrent-claim safety model is weakened to filesystem-visibility only (edits are immediately visible on a shared filesystem, but the push-then-fail collision guard is unavailable). A follow-up PR will document whether `$PROJECT_DIR` should be a separate tracking git repo, or whether file-only plan writes are the sanctioned model for split layout.
 
 ---
 
